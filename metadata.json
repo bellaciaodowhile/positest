@@ -1,0 +1,6 @@
+{
+  "name": "POS & Gestión Multimoneda",
+  "description": "Sistema integral de punto de venta, inventario multimoneda con tasa BCV, control de caja, finanzas, exportación PDF/Excel y soporte Supabase.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
