@@ -1,3 +1,8 @@
+/**
+ * Servicio de Sincronización con Supabase con soporte offline-first
+ * Cuando no hay conexión, las operaciones se guardan en cola para sincronizar luego
+ */
+
 import { getSupabaseClient, isSupabaseConfigured } from './supabaseClient';
 import {
   toValidUUID,
@@ -22,9 +27,11 @@ import {
   InventoryMovement,
   PaymentMethodType,
 } from '../types';
+import { addToQueue, processQueue } from './syncQueue';
+import { onlineMonitor } from './onlineMonitor';
 
 /**
- * Carga todo el conjunto de datos desde Supabase si el cliente está conectado y las tablas existen.
+ * Carga todo el conjunto de datos desde Supabase si está conectado
  */
 export async function loadAllDataFromSupabase(): Promise<{
   success: boolean;
@@ -43,9 +50,14 @@ export async function loadAllDataFromSupabase(): Promise<{
   };
   error?: string;
 }> {
-  const client = getSupabaseClient();
-  if (!client) {
+  if (!isSupabaseConfigured()) {
     return { success: false, error: 'Supabase no está configurado.' };
+  }
+
+  const client = getSupabaseClient();
+  if (!client || !onlineMonitor.isOnline()) {
+    // Si no hay conexión, retornar datos locales
+    return { success: true, data: undefined };
   }
 
   try {
@@ -142,7 +154,7 @@ export async function loadAllDataFromSupabase(): Promise<{
         fondoInicialUSD: Number(ct.fondo_inicial_usd || 0),
         fondoInicialVES: Number(ct.fondo_inicial_ves || 0),
         tasaBCV: Number(ct.tasa_bcv),
-        ventasEfectivoUSD: 0, // Se calculan o actualizan en runtime
+        ventasEfectivoUSD: 0,
         ventasEfectivoVES: 0,
         ventasPuntoVentaVES: 0,
         ventasPagoMovilVES: 0,
@@ -266,7 +278,7 @@ export async function loadAllDataFromSupabase(): Promise<{
       };
     });
 
-    // 8. Cuentas por cobrar (CxC)
+    // 8. Cuentas por cobrar
     const { data: cxcData, error: cxcErr } = await client
       .from('cuentas_por_cobrar')
       .select('*')
@@ -295,7 +307,7 @@ export async function loadAllDataFromSupabase(): Promise<{
       };
     });
 
-    // 9. Cuentas por pagar (CxP)
+    // 9. Cuentas por pagar
     const { data: cxpData, error: cxpErr } = await client
       .from('cuentas_por_pagar')
       .select('*')
@@ -364,11 +376,16 @@ export async function loadAllDataFromSupabase(): Promise<{
 }
 
 /**
- * Guarda una nueva nota de venta en Supabase (con sus items y pagos) y descuenta stock
+ * Guarda una nueva nota de venta en Supabase (con cola offline-first)
  */
 export async function syncSaleToSupabase(sale: SaleNote): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  // Si no hay conexión o Supabase no está configurado, usar cola
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('sale', sale);
+    return true; // Operación encolada, no falló
+  }
 
   try {
     const saleId = toValidUUID(sale.id) || generateUUID();
@@ -400,12 +417,10 @@ export async function syncSaleToSupabase(sale: SaleNote): Promise<boolean> {
       estado: sale.estado || 'completada',
     };
 
-    // 1. Insertar o actualizar nota principal
+    // 1. Insertar nota principal
     let { error: saleError } = await client.from('ventas_notas').upsert(salePayload);
 
-    // Si falló por restricción de llave foránea (e.g. turno no existe o cliente nuevo), reintentar de forma segura
     if (saleError && saleError.message?.includes('foreign key')) {
-      console.warn('Reintentando inserción de venta sin turno_id foráneo y cliente base...', saleError.message);
       salePayload.turno_id = null;
       salePayload.cliente_id = '11111111-1111-1111-1111-111111111100';
       const retry = await client.from('ventas_notas').upsert(salePayload);
@@ -414,10 +429,11 @@ export async function syncSaleToSupabase(sale: SaleNote): Promise<boolean> {
 
     if (saleError) {
       console.error('Error insertando venta_nota en Supabase:', saleError);
+      addToQueue('sale', sale); // Reintentar luego
       return false;
     }
 
-    // 2. Insertar o actualizar items con UUIDs válidos
+    // 2. Insertar items
     if (sale.items && sale.items.length > 0) {
       const itemsPayload = sale.items.map((it) => {
         const prodUUID = it.productoId && isValidUUID(it.productoId)
@@ -445,7 +461,6 @@ export async function syncSaleToSupabase(sale: SaleNote): Promise<boolean> {
 
       let { error: itemsError } = await client.from('ventas_items').upsert(itemsPayload);
 
-      // Si falla por foreign key de producto_id, reintentar con producto_id null para asegurar el registro
       if (itemsError && itemsError.message?.includes('foreign key')) {
         const sanitizedItems = itemsPayload.map((item) => ({ ...item, producto_id: null }));
         const retryItems = await client.from('ventas_items').upsert(sanitizedItems);
@@ -456,7 +471,7 @@ export async function syncSaleToSupabase(sale: SaleNote): Promise<boolean> {
         console.warn('Aviso al insertar items en Supabase:', itemsError);
       }
 
-      // Descontar stock en Supabase para cada producto
+      // Descontar stock
       for (const it of sale.items) {
         const prodUUID = it.productoId && isValidUUID(it.productoId)
           ? it.productoId
@@ -478,13 +493,13 @@ export async function syncSaleToSupabase(sale: SaleNote): Promise<boolean> {
                 .eq('id', prodUUID);
             }
           } catch (e) {
-            // Ignorar fallos no críticos de stock
+            // Ignorar fallos no críticos
           }
         }
       }
     }
 
-    // 3. Insertar o actualizar pagos
+    // 3. Insertar pagos
     if (sale.pagos && sale.pagos.length > 0) {
       const pagosPayload = sale.pagos.map((p) => ({
         id: generateUUID(),
@@ -511,12 +526,13 @@ export async function syncSaleToSupabase(sale: SaleNote): Promise<boolean> {
     return true;
   } catch (err) {
     console.error('Error sincronizando venta con Supabase:', err);
+    addToQueue('sale', sale); // Reintentar luego
     return false;
   }
 }
 
 /**
- * Anula una venta en Supabase y reintegra el stock
+ * Anula una venta en Supabase
  */
 export async function syncCancelSaleToSupabase(
   saleId: string,
@@ -525,7 +541,16 @@ export async function syncCancelSaleToSupabase(
   itemsToRestock: { productoId: string; cantidad: number }[]
 ): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('cancelSale', {
+      saleId,
+      reason,
+      cancelledByName,
+      itemsToRestock,
+    });
+    return true;
+  }
 
   try {
     const saleUUID = toValidUUID(saleId) || saleId;
@@ -562,6 +587,12 @@ export async function syncCancelSaleToSupabase(
     return true;
   } catch (err) {
     console.error('Error anulando venta en Supabase:', err);
+    addToQueue('cancelSale', {
+      saleId,
+      reason,
+      cancelledByName,
+      itemsToRestock,
+    });
     return false;
   }
 }
@@ -571,7 +602,11 @@ export async function syncCancelSaleToSupabase(
  */
 export async function syncProductToSupabase(product: Product): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('product', product);
+    return true;
+  }
 
   try {
     const prodUUID = toValidUUID(product.id) || generateUUID();
@@ -583,6 +618,7 @@ export async function syncProductToSupabase(product: Product): Promise<boolean> 
       clasificacion: product.clasificacion || 'exento',
       costo_usd: Number(product.costoUSD) || 0,
       margen_ganancia: Number(product.margenGanancia) || 0,
+      unidades: Number(product.unidades) || 1,
       precio_usd: Number(product.precioUSD) || 0,
       stock_actual: Number(product.stockActual) || 0,
       stock_minimo: Number(product.stockMinimo) || 0,
@@ -593,18 +629,19 @@ export async function syncProductToSupabase(product: Product): Promise<boolean> 
 
     let { error } = await client.from('productos').upsert(payload, { onConflict: 'codigo_barras' });
     if (error) {
-      // Reintentar con upsert básico
       const retry = await client.from('productos').upsert(payload);
       error = retry.error;
     }
 
     if (error) {
       console.error('Error upsert producto Supabase:', error);
+      addToQueue('product', product);
       return false;
     }
     return true;
   } catch (err) {
     console.error('Error syncProductToSupabase:', err);
+    addToQueue('product', product);
     return false;
   }
 }
@@ -614,7 +651,11 @@ export async function syncProductToSupabase(product: Product): Promise<boolean> 
  */
 export async function syncStockMovementToSupabase(movement: InventoryMovement): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('stockMovement', movement);
+    return true;
+  }
 
   try {
     const movUUID = toValidUUID(movement.id) || generateUUID();
@@ -640,7 +681,7 @@ export async function syncStockMovementToSupabase(movement: InventoryMovement): 
       error = retry.error;
     }
 
-    // Actualizar también la tabla productos si prodUUID existe
+    // Actualizar también productos
     if (prodUUID) {
       await client
         .from('productos')
@@ -651,6 +692,7 @@ export async function syncStockMovementToSupabase(movement: InventoryMovement): 
     return true;
   } catch (err) {
     console.error('Error syncStockMovementToSupabase:', err);
+    addToQueue('stockMovement', movement);
     return false;
   }
 }
@@ -660,7 +702,11 @@ export async function syncStockMovementToSupabase(movement: InventoryMovement): 
  */
 export async function syncCashShiftToSupabase(shift: CashShift): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('cashShift', shift);
+    return true;
+  }
 
   try {
     const shiftUUID = toValidUUID(shift.id) || generateUUID();
@@ -685,11 +731,13 @@ export async function syncCashShiftToSupabase(shift: CashShift): Promise<boolean
     const { error } = await client.from('cajas_turnos').upsert(payload);
     if (error) {
       console.error('Error syncCashShiftToSupabase:', error);
+      addToQueue('cashShift', shift);
       return false;
     }
     return true;
   } catch (err) {
     console.error('Error syncCashShiftToSupabase:', err);
+    addToQueue('cashShift', shift);
     return false;
   }
 }
@@ -699,7 +747,11 @@ export async function syncCashShiftToSupabase(shift: CashShift): Promise<boolean
  */
 export async function syncExpenseToSupabase(expense: Expense): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('expense', expense);
+    return true;
+  }
 
   try {
     const expUUID = toValidUUID(expense.id) || generateUUID();
@@ -721,11 +773,13 @@ export async function syncExpenseToSupabase(expense: Expense): Promise<boolean> 
 
     if (error) {
       console.error('Error insert gasto Supabase:', error);
+      addToQueue('expense', expense);
       return false;
     }
     return true;
   } catch (err) {
     console.error('Error syncExpenseToSupabase:', err);
+    addToQueue('expense', expense);
     return false;
   }
 }
@@ -735,7 +789,11 @@ export async function syncExpenseToSupabase(expense: Expense): Promise<boolean> 
  */
 export async function syncClientToSupabase(clientObj: Client): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('client', clientObj);
+    return true;
+  }
 
   try {
     const cliUUID = mapClientToUUID(clientObj.id) || toValidUUID(clientObj.id) || generateUUID();
@@ -751,11 +809,13 @@ export async function syncClientToSupabase(clientObj: Client): Promise<boolean> 
 
     if (error) {
       console.error('Error upsert cliente Supabase:', error);
+      addToQueue('client', clientObj);
       return false;
     }
     return true;
   } catch (err) {
     console.error('Error syncClientToSupabase:', err);
+    addToQueue('client', clientObj);
     return false;
   }
 }
@@ -765,7 +825,11 @@ export async function syncClientToSupabase(clientObj: Client): Promise<boolean> 
  */
 export async function syncAuditLogToSupabase(log: AuditLog): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('auditLog', log);
+    return true;
+  }
 
   try {
     const logUUID = toValidUUID(log.id) || generateUUID();
@@ -782,16 +846,21 @@ export async function syncAuditLogToSupabase(log: AuditLog): Promise<boolean> {
     });
     return true;
   } catch {
+    addToQueue('auditLog', log);
     return false;
   }
 }
 
 /**
- * Guarda o actualiza una cuenta por cobrar (CxC) en Supabase con su lista de abonos
+ * Guarda o actualiza una cuenta por cobrar (CxC) en Supabase
  */
 export async function syncCxCToSupabase(cxcItem: AccountReceivable): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('cxc', cxcItem);
+    return true;
+  }
 
   try {
     const cxcUUID = toValidUUID(cxcItem.id) || generateUUID();
@@ -825,11 +894,13 @@ export async function syncCxCToSupabase(cxcItem: AccountReceivable): Promise<boo
 
     if (error) {
       console.error('Error upsert cuenta por cobrar Supabase:', error);
+      addToQueue('cxc', cxcItem);
       return false;
     }
     return true;
   } catch (err) {
     console.error('Error syncCxCToSupabase:', err);
+    addToQueue('cxc', cxcItem);
     return false;
   }
 }
@@ -839,7 +910,11 @@ export async function syncCxCToSupabase(cxcItem: AccountReceivable): Promise<boo
  */
 export async function syncSupplierToSupabase(supplier: Supplier): Promise<boolean> {
   const client = getSupabaseClient();
-  if (!client) return false;
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('supplier', supplier);
+    return true;
+  }
 
   try {
     const suppUUID = toValidUUID(supplier.id) || generateUUID();
@@ -854,18 +929,19 @@ export async function syncSupplierToSupabase(supplier: Supplier): Promise<boolea
 
     if (error) {
       console.error('Error upsert proveedor Supabase:', error);
+      addToQueue('supplier', supplier);
       return false;
     }
     return true;
   } catch (err) {
     console.error('Error syncSupplierToSupabase:', err);
+    addToQueue('supplier', supplier);
     return false;
   }
 }
 
 /**
  * Sincronización masiva de todo el dataset actual a Supabase
- * Útil para subir datos locales preexistentes a la nube en 1 clic
  */
 export async function syncBulkDataToSupabase(dataset: {
   products: Product[];
@@ -877,6 +953,10 @@ export async function syncBulkDataToSupabase(dataset: {
   activeShift: CashShift | null;
   shiftHistory: CashShift[];
 }): Promise<{ success: boolean; count: number; error?: string }> {
+  if (!isSupabaseConfigured() || !onlineMonitor.isOnline()) {
+    return { success: false, count: 0, error: 'Sin conexión a internet o Supabase no configurado' };
+  }
+
   const client = getSupabaseClient();
   if (!client) {
     return { success: false, count: 0, error: 'Supabase no está configurado aún.' };
@@ -913,13 +993,13 @@ export async function syncBulkDataToSupabase(dataset: {
       if (ok) totalSynced++;
     }
 
-    // 5. Ventas (con items y pagos)
+    // 5. Ventas
     for (const sale of dataset.sales) {
       const ok = await syncSaleToSupabase(sale);
       if (ok) totalSynced++;
     }
 
-    // 6. Cuentas por Cobrar (CxC)
+    // 6. Cuentas por Cobrar
     for (const c of dataset.cxc) {
       const ok = await syncCxCToSupabase(c);
       if (ok) totalSynced++;
@@ -940,3 +1020,4 @@ export async function syncBulkDataToSupabase(dataset: {
     };
   }
 }
+

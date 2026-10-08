@@ -27,28 +27,52 @@ export const CostStructureModal: React.FC<CostStructureModalProps> = ({
   bcvRate,
 }) => {
   // Mini simulador interactivo para que el usuario experimente
-  const [simCosto, setSimCosto] = useState<number>(10);
-  const [simMargen, setSimMargen] = useState<number>(30);
-  const [simPrecio, setSimPrecio] = useState<number>(13);
+  const [simCosto, setSimCosto] = useState<string>('');
+  const [simMargen, setSimMargen] = useState<string>('');
+  const [simUnidades, setSimUnidades] = useState<string>('');
+  const [simPrecio, setSimPrecio] = useState<string>('');
 
   if (!isOpen) return null;
 
-  const handleSimCostOrMarginChange = (cost: number, margin: number) => {
-    setSimCosto(cost);
-    setSimMargen(margin);
-    const calculated = Number((cost * (1 + margin / 100)).toFixed(2));
-    setSimPrecio(calculated);
+  const handleSimCostOrMarginChange = (costStr: string, marginStr: string, unidadesStr: string) => {
+    setSimCosto(costStr);
+    setSimMargen(marginStr);
+    setSimUnidades(unidadesStr);
+    
+    // Fórmula: Costo ÷ (1 - Margen/100) ÷ Unidades
+    // Ejemplo: 10 ÷ (1 - 30%) = 10 ÷ 0.7 = 14.29
+    const cost = parseFloat(costStr);
+    const margin = parseFloat(marginStr);
+    const unidades = parseFloat(unidadesStr);
+    
+    if (isNaN(cost) || isNaN(margin) || isNaN(unidades) || margin >= 100 || unidades <= 0) {
+      setSimPrecio('');
+      return;
+    }
+    
+    const precioTotal = cost / (1 - margin / 100);
+    const precioPorUnidad = precioTotal / unidades;
+    setSimPrecio(Number(precioPorUnidad.toFixed(2)).toString());
   };
 
-  const handleSimPriceChange = (price: number) => {
-    setSimPrecio(price);
-    if (simCosto > 0) {
-      const calculatedMargin = Number((((price - simCosto) / simCosto) * 100).toFixed(2));
-      setSimMargen(calculatedMargin);
+  const handleSimPriceChange = (priceStr: string) => {
+    setSimPrecio(priceStr);
+    const cost = parseFloat(simCosto);
+    const margin = parseFloat(simMargen);
+    const unidades = parseFloat(simUnidades);
+    const price = parseFloat(priceStr);
+    
+    if (!isNaN(cost) && !isNaN(price) && !isNaN(unidades) && cost > 0 && unidades > 0) {
+      // Inversa: Margen = (1 - Costo / (Precio * Unidades)) * 100
+      const precioTotal = price * unidades;
+      const calculatedMargin = Number(((1 - cost / precioTotal) * 100).toFixed(2));
+      setSimMargen(calculatedMargin.toString());
     }
   };
 
-  const simGananciaUSD = Math.max(0, simPrecio - simCosto);
+  // Cálculos adicionales
+  const simPrecioTotalUSD = simPrecio * simUnidades;
+  const simGananciaUSD = Math.max(0, simPrecioTotalUSD - simCosto);
   const simPrecioBs = usdToVes(simPrecio, bcvRate);
   const simGananciaBs = usdToVes(simGananciaUSD, bcvRate);
 
@@ -102,7 +126,7 @@ export const CostStructureModal: React.FC<CostStructureModalProps> = ({
               <strong className="block text-indigo-900 font-bold mb-1 text-sm">
                 En pocas palabras:
               </strong>
-              Fijas tu <strong>Costo de Compra en USD</strong> y el <strong>Margen % que deseas ganar</strong>. El sistema calcula automáticamente el <strong>Precio Final en USD</strong>. En el Punto de Venta (POS), este precio se multiplica en vivo por la <strong>Tasa Oficial del BCV</strong> para cobrar en Bolívares sin que pierdas dinero si la tasa cambia.
+              Ingresas el <strong>Costo Total del Paquete en USD</strong>, el <strong>Margen %</strong> que deseas ganar y las <strong>Unidades por Paquete</strong>. El sistema calcula automáticamente el <strong>Precio por Unidad en USD</strong> usando la fórmula: <strong>Costo ÷ (1 - Margen/100) ÷ Unidades</strong>. En el Punto de Venta (POS), este precio se convierte en vivo a Bolívares según la <strong>Tasa Oficial del BCV</strong>.
             </div>
           </div>
 
@@ -204,10 +228,10 @@ export const CostStructureModal: React.FC<CostStructureModalProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div>
                 <label className="block text-[11px] text-slate-400 font-semibold mb-1">
-                  Costo de Adquisición ($)
+                  Costo Total Paquete ($)
                 </label>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 text-xs">
@@ -217,11 +241,12 @@ export const CostStructureModal: React.FC<CostStructureModalProps> = ({
                     type="number"
                     step="0.5"
                     min="0"
-                    value={simCosto}
+                    value={simCosto === '' ? '' : Number(simCosto)}
                     onChange={(e) =>
-                      handleSimCostOrMarginChange(parseFloat(e.target.value) || 0, simMargen)
+                      handleSimCostOrMarginChange(e.target.value, simMargen, simUnidades)
                     }
-                    className="w-full pl-6 pr-2 py-1.5 text-xs font-bold bg-slate-800 border border-slate-700 rounded-lg text-white focus:outline-hidden focus:border-indigo-400"
+                    placeholder="0.00"
+                    className="w-full pl-6 pr-2 py-1.5 text-xs font-bold bg-slate-800 border border-slate-700 rounded-lg text-white focus:outline-hidden focus:border-indigo-400 placeholder-slate-600"
                   />
                 </div>
               </div>
@@ -235,11 +260,13 @@ export const CostStructureModal: React.FC<CostStructureModalProps> = ({
                     type="number"
                     step="1"
                     min="0"
-                    value={simMargen}
+                    max="99"
+                    value={simMargen === '' ? '' : Number(simMargen)}
                     onChange={(e) =>
-                      handleSimCostOrMarginChange(simCosto, parseFloat(e.target.value) || 0)
+                      handleSimCostOrMarginChange(simCosto, e.target.value, simUnidades)
                     }
-                    className="w-full px-2.5 py-1.5 text-xs font-bold bg-slate-800 border border-slate-700 rounded-lg text-emerald-400 focus:outline-hidden focus:border-indigo-400"
+                    placeholder="0"
+                    className="w-full px-2.5 py-1.5 text-xs font-bold bg-slate-800 border border-slate-700 rounded-lg text-emerald-400 focus:outline-hidden focus:border-indigo-400 placeholder-slate-600"
                   />
                   <span className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-400 text-xs">
                     %
@@ -249,7 +276,29 @@ export const CostStructureModal: React.FC<CostStructureModalProps> = ({
 
               <div>
                 <label className="block text-[11px] text-slate-400 font-semibold mb-1">
-                  Precio de Venta ($ REF)
+                  Unidades por Paquete
+                </label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 text-xs">
+                    UDS
+                  </span>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={simUnidades === '' ? '' : Number(simUnidades)}
+                    onChange={(e) =>
+                      handleSimCostOrMarginChange(simCosto, simMargen, e.target.value)
+                    }
+                    placeholder="1"
+                    className="w-full pl-6 pr-2 py-1.5 text-xs font-bold bg-slate-800 border border-slate-700 rounded-lg text-blue-400 focus:outline-hidden focus:border-indigo-400 placeholder-slate-600"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-slate-400 font-semibold mb-1">
+                  Precio por Unidad ($)
                 </label>
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-2.5 flex items-center text-slate-400 text-xs">
@@ -257,13 +306,17 @@ export const CostStructureModal: React.FC<CostStructureModalProps> = ({
                   </span>
                   <input
                     type="number"
-                    step="0.1"
+                    step="0.01"
                     min="0"
-                    value={simPrecio}
-                    onChange={(e) => handleSimPriceChange(parseFloat(e.target.value) || 0)}
-                    className="w-full pl-6 pr-2 py-1.5 text-xs font-bold bg-slate-800 border border-slate-700 rounded-lg text-blue-400 focus:outline-hidden focus:border-indigo-400"
+                    value={simPrecio === '' ? '' : Number(simPrecio)}
+                    readOnly
+                    placeholder="0.00"
+                    className="w-full pl-6 pr-2 py-1.5 text-xs font-bold bg-slate-800/50 border border-slate-700 rounded-lg text-indigo-300 placeholder-slate-600"
                   />
                 </div>
+                <p className="text-[9px] text-slate-500 mt-1 text-center">
+                  Fórmula: Costo ÷ (1 - %/100) ÷ UDS
+                </p>
               </div>
             </div>
 

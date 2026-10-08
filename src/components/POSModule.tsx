@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import Decimal from 'decimal.js';
 import {
   Search,
   Barcode,
@@ -102,9 +103,6 @@ export const POSModule: React.FC<POSModuleProps> = ({
   const [payLaterAbonoMethod, setPayLaterAbonoMethod] = useState<PaymentMethodType>('pago_movil');
   const [payLaterAbonoRef, setPayLaterAbonoRef] = useState('');
 
-  // Preferencia de vuelto
-  const [vueltoPreference, setVueltoPreference] = useState<'VES' | 'USD' | 'MIXTO'>('VES');
-
   // Modal de creación rápida de cliente
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [newClientDoc, setNewClientDoc] = useState('V-');
@@ -184,6 +182,9 @@ export const POSModule: React.FC<POSModuleProps> = ({
       }
       return [...prev, { product, quantity: 1 }];
     });
+
+    // Recalcular distribución de pagos al añadir un producto nuevo
+    handleCalculateDistribution();
   };
 
   const updateQuantity = (productId: string, newQty: number) => {
@@ -315,12 +316,57 @@ export const POSModule: React.FC<POSModuleProps> = ({
     ]);
   };
 
-  const handleUpdatePayment = (index: number, field: string, value: any) => {
+  // Guardar monto manualmente sin calcular automáticamente
+  const handlePaymentAmountChange = (index: number, newAmount: number) => {
     setPaymentBreakdown((prev) => {
       const next = [...prev];
-      next[index] = { ...next[index], [field]: value };
+      next[index] = { ...next[index], amount: newAmount };
       return next;
     });
+  };
+
+  // Calcular distribución de pagos usando Decimal.js para precisión
+  // Todo el cálculo se hace directamente en Bolívares (VES)
+  // Solo se distribuye si el total actual supera el monto a pagar
+  const handleCalculateDistribution = () => {
+    // Convertir total a pagar a VES (ya tiene 2 decimales)
+    const totalNeededVES = granTotalVES;
+    
+    // Calcular total actual en VES usando Decimal.js
+    let totalCurrentVES = 0;
+    paymentBreakdown.forEach((p) => {
+      if (p.method === 'efectivo_usd' || p.method === 'zelle') {
+        // Convertir USD a VES
+        const vesEquivalent = usdToVes(p.amount || 0, bcvRate);
+        totalCurrentVES = Number(new Decimal(totalCurrentVES).add(vesEquivalent));
+      } else {
+        // Ya es VES
+        totalCurrentVES = Number(new Decimal(totalCurrentVES).add(p.amount || 0));
+      }
+    });
+
+    // Si el total actual es mayor que lo necesario, restar del penúltimo método
+    if (new Decimal(totalCurrentVES).greaterThan(totalNeededVES)) {
+      const excessVES = Number(new Decimal(totalCurrentVES).sub(totalNeededVES).toFixed(2));
+      
+      setPaymentBreakdown((prev) => {
+        const next = [...prev];
+        
+        // Si hay al menos 2 métodos, restar del penúltimo
+        if (next.length >= 2) {
+          const prevIndex = next.length - 2;
+          const prevPayment = next[prevIndex];
+          
+          // Restar directamente en VES (redondeado a 2 decimales)
+          const amountVES = Number(new Decimal(prevPayment.amount).sub(excessVES).toFixed(2));
+          next[prevIndex] = { 
+            ...prevPayment, 
+            amount: Math.max(0, amountVES) 
+          };
+        }
+        return next;
+      });
+    }
   };
 
   const handleRemovePayment = (index: number) => {
@@ -338,19 +384,6 @@ export const POSModule: React.FC<POSModuleProps> = ({
   }, 0);
 
   const totalPagadoVES = usdToVes(totalPagadoUSD, bcvRate);
-
-  // Cálculo de vuelto exacto
-  const exactChangeInfo = calculateExactChange({
-    totalUSD: granTotalUSD,
-    paidUSD: paymentBreakdown
-      .filter((p) => p.method === 'efectivo_usd' || p.method === 'zelle')
-      .reduce((s, p) => s + (p.amount || 0), 0),
-    paidVES: paymentBreakdown
-      .filter((p) => p.method !== 'efectivo_usd' && p.method !== 'zelle')
-      .reduce((s, p) => s + (p.amount || 0), 0),
-    bcvRate,
-    preferVueltoEn: vueltoPreference,
-  });
 
   // Procesar y Registrar la Venta
   const handleFinalizeSale = () => {
@@ -463,13 +496,14 @@ export const POSModule: React.FC<POSModuleProps> = ({
       pagos: pagosFormatted,
       montoRecibidoUSD: totalPagadoUSD,
       montoRecibidoVES: totalPagadoVES,
-      vueltoUSD: exactChangeInfo.vueltoUSD,
-      vueltoVES: exactChangeInfo.vueltoVES,
+      vueltoUSD: 0,
+      vueltoVES: 0,
       estado: 'completada',
     };
 
     onCompleteSale(newSale);
     setCompletedSale(newSale);
+    setPaymentBreakdown([]);
     setShowPaymentModal(false);
     setCart([]);
   };
@@ -1148,7 +1182,10 @@ export const POSModule: React.FC<POSModuleProps> = ({
               {/* Salir / Volver */}
               <button
                 type="button"
-                onClick={() => setShowPaymentModal(false)}
+                onClick={() => {
+                  setShowPaymentModal(false);
+                  setPaymentBreakdown([]);
+                }}
                 className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer border border-slate-700"
                 title="Cerrar terminal de pago"
               >
@@ -1500,8 +1537,9 @@ export const POSModule: React.FC<POSModuleProps> = ({
                             <div className="flex items-center gap-1 shrink-0 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                               <button
                                 type="button"
-                                onClick={() => updateQuantity(p.id, -1)}
-                                className="p-1 hover:bg-white rounded text-slate-700 cursor-pointer"
+                                onClick={() => updateQuantity(p.id, item.quantity - 1)}
+                                className="p-1 hover:bg-white rounded text-slate-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled={item.quantity <= 1}
                               >
                                 <Minus className="w-3 h-3" />
                               </button>
@@ -1510,8 +1548,9 @@ export const POSModule: React.FC<POSModuleProps> = ({
                               </span>
                               <button
                                 type="button"
-                                onClick={() => updateQuantity(p.id, 1)}
-                                className="p-1 hover:bg-white rounded text-slate-700 cursor-pointer"
+                                onClick={() => updateQuantity(p.id, item.quantity + 1)}
+                                className="p-1 hover:bg-white rounded text-slate-700 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                                disabled={item.quantity >= p.stockActual}
                               >
                                 <Plus className="w-3 h-3" />
                               </button>
@@ -1664,11 +1703,18 @@ export const POSModule: React.FC<POSModuleProps> = ({
                               type="number"
                               step="0.01"
                               min="0"
+                              placeholder="0.00"
                               value={payment.amount || ''}
-                              onChange={(e) =>
-                                handleUpdatePayment(idx, 'amount', parseFloat(e.target.value) || 0)
-                              }
-                              placeholder="Monto"
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                if (!isNaN(val) && e.target.value !== '') {
+                                  // Limitar a 2 decimales
+                                  const rounded = Math.round(val * 100) / 100;
+                                  handlePaymentAmountChange(idx, rounded);
+                                } else if (e.target.value === '') {
+                                  handlePaymentAmountChange(idx, 0);
+                                }
+                              }}
                               className={`w-full ${isDivisa ? 'pl-11' : 'pl-9'} pr-3 py-2 text-xs font-bold font-mono border border-slate-300 rounded-lg bg-white text-slate-900 focus:ring-2 focus:ring-indigo-500`}
                             />
                           </div>
@@ -1677,9 +1723,16 @@ export const POSModule: React.FC<POSModuleProps> = ({
                             <input
                               type="text"
                               value={payment.reference || ''}
-                              onChange={(e) => handleUpdatePayment(idx, 'reference', e.target.value)}
+                              onChange={(e) => {
+                                // Solo actualizar la referencia sin recalcular
+                                setPaymentBreakdown((prev) => {
+                                  const next = [...prev];
+                                  next[idx] = { ...next[idx], reference: e.target.value };
+                                  return next;
+                                });
+                              }}
                               placeholder={payment.method === 'punto_venta' ? 'Lote / Ref' : 'Ref / Comprobante'}
-                              className="w-full sm:w-32 text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white text-slate-800"
+                              className="w-full sm:w-32 text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500"
                             />
                           )}
 
@@ -1699,37 +1752,8 @@ export const POSModule: React.FC<POSModuleProps> = ({
 
                   {/* 5. CÁLCULO DE VUELTO O SALDO PENDIENTE */}
                   <div className="bg-slate-900 border border-slate-800 p-3.5 rounded-xl text-white">
-                    <div className="flex items-center justify-between text-[11px] mb-2.5">
-                      <span className="font-bold text-slate-300">Preferencia de Vuelto:</span>
-                      <div className="flex items-center gap-1 bg-slate-800 p-0.5 rounded-lg text-[10px]">
-                        <button
-                          type="button"
-                          onClick={() => setVueltoPreference('VES')}
-                          className={`px-2 py-1 rounded font-bold cursor-pointer transition-colors ${
-                            vueltoPreference === 'VES' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'
-                          }`}
-                        >
-                          Bolívares (VES)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setVueltoPreference('USD')}
-                          className={`px-2 py-1 rounded font-bold cursor-pointer transition-colors ${
-                            vueltoPreference === 'USD' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'
-                          }`}
-                        >
-                          Divisas (REF)
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setVueltoPreference('MIXTO')}
-                          className={`px-2 py-1 rounded font-bold cursor-pointer transition-colors ${
-                            vueltoPreference === 'MIXTO' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'
-                          }`}
-                        >
-                          Mixto
-                        </button>
-                      </div>
+                    <div className="text-xs text-slate-400 font-medium p-2 bg-slate-800 rounded-lg text-center">
+                      Distribuye el total entre tus métodos de pago
                     </div>
 
                     <div className="grid grid-cols-2 gap-3 text-xs pt-1 border-t border-slate-800">
@@ -1744,39 +1768,40 @@ export const POSModule: React.FC<POSModuleProps> = ({
                       </div>
 
                       <div className="text-right">
-                        {totalPagadoUSD < granTotalUSD - 0.01 ? (
-                          <div>
-                            <span className="text-[10px] text-amber-400 font-bold">Faltante por Pagar:</span>
-                            <div className="font-bold text-amber-400 font-mono text-sm">
-                              {formatUSD(granTotalUSD - totalPagadoUSD)}
-                            </div>
-                            <div className="text-[10px] text-amber-400/80 font-mono">
-                              {formatVES((granTotalUSD - totalPagadoUSD) * bcvRate)}
-                            </div>
+                        <div>
+                          <span className="text-[10px] text-amber-400 font-bold">Monto Pendiente:</span>
+                          <div className="font-bold text-amber-400 font-mono text-sm">
+                            {formatUSD(Math.max(0, granTotalUSD - totalPagadoUSD))}
                           </div>
-                        ) : (
-                          <div>
-                            <span className="text-[10px] text-slate-400">Vuelto Calculado:</span>
-                            <div className="font-bold text-emerald-400 font-mono text-sm">
-                              {exactChangeInfo.hasChange
-                                ? `${exactChangeInfo.vueltoUSD > 0 ? formatUSD(exactChangeInfo.vueltoUSD) : ''} ${
-                                    exactChangeInfo.vueltoUSD > 0 && exactChangeInfo.vueltoVES > 0 ? '+ ' : ''
-                                  }${exactChangeInfo.vueltoVES > 0 ? formatVES(exactChangeInfo.vueltoVES) : ''}`
-                                : 'Pago Exacto'}
-                            </div>
+                          <div className="text-[10px] text-amber-400/80 font-mono">
+                            {formatVES(Math.max(0, (granTotalUSD - totalPagadoUSD) * bcvRate))}
                           </div>
-                        )}
+                          <div className="text-[9px] text-amber-400/60 mt-1">
+                            Total a pagar: {formatUSD(granTotalUSD)}
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
 
                   {/* 6. BOTONES DE ACCIÓN: FLUJO NATURAL SIN SCROLL ATRAPADO */}
                   <div className="pt-2 space-y-2">
+                    {/* Botón Calcular Distribución */}
+                    <button
+                      type="button"
+                      onClick={handleCalculateDistribution}
+                      disabled={cart.length === 0}
+                      className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-100 disabled:text-slate-400 text-white text-xs font-bold rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-colors border border-transparent disabled:cursor-not-allowed uppercase tracking-wider"
+                    >
+                      <RefreshCw className="w-4 h-4 shrink-0" />
+                      <span>Distribuir Monto</span>
+                    </button>
+
                     {/* Botón Principal: Confirmar Venta & Cobrar */}
                     <button
                       id="btn-confirmar-venta"
                       type="button"
-                      disabled={cart.length === 0 || totalPagadoUSD < granTotalUSD - 0.01}
+                      disabled={cart.length === 0}
                       onClick={handleFinalizeSale}
                       className="w-full py-4 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-100 disabled:text-slate-400 text-white text-xs font-bold rounded-xl shadow-xs flex items-center justify-center gap-2 cursor-pointer transition-colors border border-transparent disabled:cursor-not-allowed uppercase tracking-wider"
                     >
@@ -1784,9 +1809,7 @@ export const POSModule: React.FC<POSModuleProps> = ({
                       <span className="truncate">
                         {cart.length === 0
                           ? 'Agregue productos para registrar pago'
-                          : totalPagadoUSD < granTotalUSD - 0.01
-                          ? `Faltan ${formatUSD(granTotalUSD - totalPagadoUSD)} para completar pago`
-                          : 'Emitir Nota & Cobrar'}
+                          : 'PAGAR'}
                       </span>
                     </button>
 
@@ -1813,7 +1836,10 @@ export const POSModule: React.FC<POSModuleProps> = ({
                     {/* Botón Terciario: Cancelar / Seguir Comprando */}
                     <button
                       type="button"
-                      onClick={() => setShowPaymentModal(false)}
+                      onClick={() => {
+                        setShowPaymentModal(false);
+                        setPaymentBreakdown([]);
+                      }}
                       className="w-full py-2.5 px-4 bg-transparent hover:bg-slate-100 text-slate-500 hover:text-slate-800 text-xs font-semibold rounded-xl cursor-pointer transition-colors text-center"
                     >
                       Cancelar

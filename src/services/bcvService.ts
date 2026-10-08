@@ -1,3 +1,7 @@
+/**
+ * Servicio de Tasa Cambiaria BCV con cacheo offline-first
+ */
+
 export interface BCVState {
   rate: number;
   lastUpdated: string;
@@ -7,11 +11,15 @@ export interface BCVState {
 }
 
 const DEFAULT_BCV_RATE = 68.50; // Tasa de referencia por defecto
-const STORAGE_KEY = 'pos_bcv_rate_data';
+const CACHE_KEY = 'pos_bcv_rate_data';
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutos de cache
 
+/**
+ * Obtener tasa BCV del cache o localStorage
+ */
 export function getStoredBCVRate(): number {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(CACHE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (parsed && typeof parsed.rate === 'number' && parsed.rate > 0) {
@@ -24,10 +32,13 @@ export function getStoredBCVRate(): number {
   return DEFAULT_BCV_RATE;
 }
 
-export function saveStoredBCVRate(rate: number, source = 'Manual') {
+/**
+ * Guardar tasa BCV en localStorage
+ */
+export function saveStoredBCVRate(rate: number, source = 'Manual'): void {
   try {
     localStorage.setItem(
-      STORAGE_KEY,
+      CACHE_KEY,
       JSON.stringify({
         rate,
         source,
@@ -40,14 +51,50 @@ export function saveStoredBCVRate(rate: number, source = 'Manual') {
 }
 
 /**
- * Consulta la API oficial / pública del Dólar BCV en Venezuela.
- * Intenta primero con dolarapi.com y luego con pydolarvenezuela como fallback.
+ * Verificar si el cache de BCV está fresco
+ */
+export function isBCVCacheFresh(): boolean {
+  try {
+    const saved = localStorage.getItem(CACHE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && parsed.lastUpdated) {
+        const lastUpdate = new Date(parsed.lastUpdated).getTime();
+        return Date.now() - lastUpdate < CACHE_TTL;
+      }
+    }
+  } catch {
+    // Ignorar errores
+  }
+  return false;
+}
+
+/**
+ * Consulta la API oficial del Dólar BCV en Venezuela
  */
 export async function fetchLiveBCVRate(): Promise<{ rate: number; source: string; timestamp: string }> {
+  // Verificar cache primero
+  if (isBCVCacheFresh()) {
+    try {
+      const saved = localStorage.getItem(CACHE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          rate: parsed.rate,
+          source: parsed.source || 'Cache Local',
+          timestamp: parsed.lastUpdated || new Date().toISOString(),
+        };
+      }
+    } catch {
+      // Continuar a API si hay error
+    }
+  }
+
   // Intentar dolarapi.com
   try {
     const res = await fetch('https://ve.dolarapi.com/v1/dolares/oficial', {
       headers: { Accept: 'application/json' },
+      cache: 'no-store',
     });
     if (res.ok) {
       const data = await res.json();
@@ -67,7 +114,9 @@ export async function fetchLiveBCVRate(): Promise<{ rate: number; source: string
 
   // Intentar pydolarvenezuela
   try {
-    const res = await fetch('https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv');
+    const res = await fetch('https://pydolarvenezuela-api.vercel.app/api/v1/dollar?page=bcv', {
+      cache: 'no-store',
+    });
     if (res.ok) {
       const data = await res.json();
       const val = parseFloat(data?.monitors?.usd?.price || data?.price);
@@ -93,11 +142,16 @@ export async function fetchLiveBCVRate(): Promise<{ rate: number; source: string
   };
 }
 
+import Decimal from 'decimal.js';
+
 /**
  * Conversión USD a VES con la tasa BCV indicada
  */
-export function usdToVes(amountUSD: number, bcvRate: number): number {
-  return Number((amountUSD * bcvRate).toFixed(2));
+export function usdToVes(amountUSD: number | string, bcvRate: number): number {
+  const numAmount = typeof amountUSD === 'string' ? parseFloat(amountUSD) : amountUSD;
+  if (isNaN(numAmount) || numAmount <= 0) return 0;
+  const result = new Decimal(numAmount).mul(bcvRate).toFixed(2);
+  return Number(result);
 }
 
 /**
@@ -105,7 +159,8 @@ export function usdToVes(amountUSD: number, bcvRate: number): number {
  */
 export function vesToUsd(amountVES: number, bcvRate: number): number {
   if (!bcvRate || bcvRate <= 0) return 0;
-  return Number((amountVES / bcvRate).toFixed(2));
+  const result = new Decimal(amountVES).div(bcvRate).toFixed(2);
+  return Number(result);
 }
 
 /**
@@ -138,20 +193,19 @@ export function formatVES(amount: number): string {
 export const IGTF_PERCENT = 0.03;
 
 export function calculateIGTF(amountUSD: number): number {
-  return Number((amountUSD * IGTF_PERCENT).toFixed(2));
+  const result = new Decimal(amountUSD).mul(IGTF_PERCENT).toFixed(2);
+  return Number(result);
 }
 
 /**
- * Algoritmo de Vuelto Exacto Multidivisa:
- * Determina el monto del vuelto en USD y/o en Bolívares dependiendo de
- * los montos pagados y la tasa oficial.
+ * Algoritmo de Vuelto Exacto Multidivisa
  */
 export function calculateExactChange({
   totalUSD,
   paidUSD,
   paidVES,
   bcvRate,
-  preferVueltoEn = 'VES', // 'VES' o 'USD' o 'MIXTO'
+  preferVueltoEn = 'VES',
 }: {
   totalUSD: number;
   paidUSD: number;
@@ -183,7 +237,7 @@ export function calculateExactChange({
     vueltoUSD = 0;
     vueltoVES = Number((diffUSD * bcvRate).toFixed(2));
   } else {
-    // Mixto: Dar billetes enteros en USD y el residuo fraccionario en Bolívares (muy común en Venezuela)
+    // Mixto
     vueltoUSD = Math.floor(diffUSD);
     const fractionUSD = diffUSD - vueltoUSD;
     vueltoVES = Number((fractionUSD * bcvRate).toFixed(2));

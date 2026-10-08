@@ -1,3 +1,8 @@
+/**
+ * Gestor de Entornos: Manejo de datos Demo vs Real con persistencia en localStorage
+ * Todos los datos se guardan en localStorage para persistencia offline-first
+ */
+
 import {
   User,
   Product,
@@ -9,6 +14,8 @@ import {
   AccountPayable,
   CashShift,
   AuditLog,
+  InventoryMovement,
+  PaymentMethodType,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -36,16 +43,18 @@ export interface DatasetState {
   shiftHistory: CashShift[];
   users: User[];
   auditLogs: AuditLog[];
+  inventoryMovements: InventoryMovement[];
 }
 
 const STORAGE_KEYS = {
   IS_DEMO: 'ventaflow_mode_is_demo',
-  REAL_DATA: 'ventaflow_real_data_v2',
-  DEMO_DATA: 'ventaflow_demo_data_v2',
+  REAL_DATA: 'ventaflow_real_data_v3',
+  DEMO_DATA: 'ventaflow_demo_data_v3',
   ACTIVE_USER_ID: 'ventaflow_active_user_id',
+  LAST_SYNC_TIMESTAMP: 'ventaflow_last_sync_timestamp',
 };
 
-// Usuarios del Sistema Real (Sin datos falsos ni usuarios de muestra; solo Administrador)
+// Usuarios del Sistema Real
 export const REAL_SYSTEM_USERS: User[] = [
   {
     id: '00000000-0000-0000-0000-000000000001',
@@ -58,7 +67,7 @@ export const REAL_SYSTEM_USERS: User[] = [
   },
 ];
 
-// Cliente base para ventas de mostrador / contado
+// Cliente base para ventas de mostrador
 export const REAL_DEFAULT_CLIENTS: Client[] = [
   {
     id: '11111111-1111-1111-1111-111111111100',
@@ -72,7 +81,7 @@ export const REAL_DEFAULT_CLIENTS: Client[] = [
   },
 ];
 
-export const DEMO_USER: User = INITIAL_USERS[0]; // Usuario Demo (Presentación Clientes)
+export const DEMO_USER: User = INITIAL_USERS[0];
 
 /**
  * Verifica si el modo activo guardado es Demo
@@ -98,14 +107,15 @@ export function setStoredDemoMode(isDemo: boolean): void {
 }
 
 /**
- * Carga el dataset del Modo Real (100% limpio, sin datos falsos ni inventario simulado)
+ * Carga el dataset del Modo Real
  */
 export function loadRealDataset(): DatasetState {
   try {
     const raw = localStorage.getItem(STORAGE_KEYS.REAL_DATA);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Filtrar cualquier producto que provenga del mockData previo
+      
+      // Filtrar productos falsos (mock)
       const mockProductBarcodes = new Set([
         '759100100101', '759100100102', '759100100103', '759100100104',
         '759100100105', '759100100106', '759100100107', '759100100108',
@@ -117,6 +127,7 @@ export function loadRealDataset(): DatasetState {
         ? parsed.products.filter((p: Product) => !isMockProduct(p))
         : [];
 
+      // Filtrar proveedores falsos
       const isMockSupplier = (s: Supplier) =>
         s.id?.startsWith('sup-00') || s.rif === 'J-00041363-4' || s.rif === 'J-00012226-5';
 
@@ -124,7 +135,7 @@ export function loadRealDataset(): DatasetState {
         ? parsed.suppliers.filter((s: Supplier) => !isMockSupplier(s))
         : [];
 
-      // Filtrar usuarios falsos (cajero, inventario de demostración)
+      // Filtrar usuarios falsos
       const realUsers = Array.isArray(parsed.users)
         ? parsed.users.filter(
             (u: User) =>
@@ -150,13 +161,14 @@ export function loadRealDataset(): DatasetState {
         shiftHistory: Array.isArray(parsed.shiftHistory) ? parsed.shiftHistory : [],
         users: realUsers.length > 0 ? realUsers : REAL_SYSTEM_USERS,
         auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
+        inventoryMovements: Array.isArray(parsed.inventoryMovements) ? parsed.inventoryMovements : [],
       };
     }
   } catch (err) {
     console.warn('Error leyendo dataset real de localStorage:', err);
   }
 
-  // Estado limpio por defecto para el Modo Real: sin productos falsos, sin ventas, solo el usuario admin
+  // Estado limpio por defecto
   return {
     products: [],
     clients: REAL_DEFAULT_CLIENTS,
@@ -165,10 +177,11 @@ export function loadRealDataset(): DatasetState {
     expenses: [],
     cxc: [],
     cxp: [],
-    activeShift: null, // Caja cerrada inicialmente
+    activeShift: null,
     shiftHistory: [],
-    users: REAL_SYSTEM_USERS, // Solo el usuario Administrador
+    users: REAL_SYSTEM_USERS,
     auditLogs: [],
+    inventoryMovements: [],
   };
 }
 
@@ -184,7 +197,7 @@ export function saveRealDataset(state: DatasetState): void {
 }
 
 /**
- * Carga el dataset del Modo Demo (Con ejemplos precargados para exhibición a clientes)
+ * Carga el dataset del Modo Demo
  */
 export function loadDemoDataset(): DatasetState {
   try {
@@ -205,6 +218,7 @@ export function loadDemoDataset(): DatasetState {
           : INITIAL_SHIFT_HISTORY,
         users: Array.isArray(parsed.users) ? parsed.users : INITIAL_USERS,
         auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : INITIAL_AUDIT_LOGS,
+        inventoryMovements: [],
       };
     }
   } catch (err) {
@@ -224,6 +238,7 @@ export function loadDemoDataset(): DatasetState {
     shiftHistory: INITIAL_SHIFT_HISTORY,
     users: INITIAL_USERS,
     auditLogs: INITIAL_AUDIT_LOGS,
+    inventoryMovements: [],
   };
 }
 
@@ -239,7 +254,7 @@ export function saveDemoDataset(state: DatasetState): void {
 }
 
 /**
- * Reinicia el dataset demo a los valores originales de muestra
+ * Reinicia el dataset demo a los valores originales
  */
 export function resetDemoDataset(): DatasetState {
   const initialDemo: DatasetState = {
@@ -254,7 +269,65 @@ export function resetDemoDataset(): DatasetState {
     shiftHistory: INITIAL_SHIFT_HISTORY,
     users: INITIAL_USERS,
     auditLogs: INITIAL_AUDIT_LOGS,
+    inventoryMovements: [],
   };
   saveDemoDataset(initialDemo);
   return initialDemo;
+}
+
+/**
+ * Guarda el timestamp de última sincronización con Supabase
+ */
+export function setLastSyncTimestamp(timestamp: string): void {
+  try {
+    localStorage.setItem(STORAGE_KEYS.LAST_SYNC_TIMESTAMP, timestamp);
+  } catch {
+    // Ignorar
+  }
+}
+
+/**
+ * Obtiene el timestamp de última sincronización con Supabase
+ */
+export function getLastSyncTimestamp(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.LAST_SYNC_TIMESTAMP);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Exporta todo el dataset actual a JSON para descarga
+ */
+export function exportDatasetToJSON(): string {
+  try {
+    const isDemo = isDemoModeStored();
+    const data = isDemo ? loadDemoDataset() : loadRealDataset();
+    return JSON.stringify(data, null, 2);
+  } catch (err) {
+    console.error('Error exportando dataset:', err);
+    return '';
+  }
+}
+
+/**
+ * Importa dataset desde JSON
+ */
+export function importDatasetFromJSON(json: string): boolean {
+  try {
+    const parsed = JSON.parse(json);
+    const isDemo = isDemoModeStored();
+    
+    if (isDemo) {
+      saveDemoDataset(parsed);
+    } else {
+      saveRealDataset(parsed);
+    }
+    
+    return true;
+  } catch (err) {
+    console.error('Error importando dataset:', err);
+    return false;
+  }
 }

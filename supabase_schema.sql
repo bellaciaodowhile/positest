@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS productos (
     clasificacion VARCHAR(30) NOT NULL CHECK (clasificacion IN ('gravable', 'exento')),
     costo_usd NUMERIC(10,2) NOT NULL DEFAULT 0.00,
     margen_ganancia NUMERIC(6,2) NOT NULL DEFAULT 30.00,
+    unidades NUMERIC(6,0) NOT NULL DEFAULT 1,
     precio_usd NUMERIC(10,2) NOT NULL DEFAULT 0.00,
     stock_actual NUMERIC(10,2) NOT NULL DEFAULT 0.00,
     stock_minimo NUMERIC(10,2) NOT NULL DEFAULT 5.00,
@@ -149,31 +150,27 @@ CREATE TABLE IF NOT EXISTS ventas_pagos (
     referencia VARCHAR(100)
 );
 
--- TABLA: MOVIMIENTOS DE INVENTARIO (KARDEX / AJUSTES)
+-- TABLA: MOVIMIENTOS DE INVENTARIO
 CREATE TABLE IF NOT EXISTS movimientos_inventario (
     id VARCHAR(100) PRIMARY KEY DEFAULT gen_random_uuid()::text,
     producto_id VARCHAR(100),
-    tipo VARCHAR(30) NOT NULL CHECK (tipo IN ('entrada', 'salida', 'ajuste')),
+    tipo VARCHAR(20) NOT NULL CHECK (tipo IN ('entrada', 'salida', 'ajuste')),
     cantidad NUMERIC(10,2) NOT NULL,
     stock_anterior NUMERIC(10,2) NOT NULL,
     stock_nuevo NUMERIC(10,2) NOT NULL,
-    motivo TEXT NOT NULL,
+    motivo TEXT,
     usuario_id VARCHAR(100),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- TABLA: GASTOS Y EGRESOS
+-- TABLA: GASTOS
 CREATE TABLE IF NOT EXISTS gastos (
     id VARCHAR(100) PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    concepto VARCHAR(200) NOT NULL,
-    categoria VARCHAR(50) NOT NULL,
+    cajero_id VARCHAR(100),
+    turno_id VARCHAR(100),
     monto_usd NUMERIC(10,2) NOT NULL,
     monto_ves NUMERIC(14,2) NOT NULL,
-    tasa_bcv NUMERIC(10,4) NOT NULL,
-    metodo_pago VARCHAR(50) NOT NULL,
-    usuario_id VARCHAR(100),
-    comprobante_ref VARCHAR(100),
-    observaciones TEXT,
+    descripcion TEXT,
     fecha TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -207,35 +204,32 @@ CREATE TABLE IF NOT EXISTS cuentas_por_pagar (
     saldo_pendiente_usd NUMERIC(10,2) NOT NULL,
     fecha_emision DATE NOT NULL DEFAULT CURRENT_DATE,
     fecha_vencimiento DATE NOT NULL,
-    estado VARCHAR(30) DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'parcial', 'pagada', 'vencida')),
+    estado VARCHAR(30) DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'parcial', 'pagada')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- TABLA: AUDITORÍA DE SEGURIDAD
+-- TABLA: AUDITORÍA Y LOGS
 CREATE TABLE IF NOT EXISTS auditoria_logs (
     id VARCHAR(100) PRIMARY KEY DEFAULT gen_random_uuid()::text,
     usuario_id VARCHAR(100),
     usuario_nombre VARCHAR(100),
-    modulo VARCHAR(50) NOT NULL,
     accion VARCHAR(100) NOT NULL,
-    detalles TEXT,
-    fecha TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    tabla VARCHAR(100),
+    registro_id VARCHAR(100),
+    detalles JSONB,
+    ip_address VARCHAR(50),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- ===================================================================
--- 3. ÍNDICES DE RENDIMIENTO
+-- 3. ÍNDICES PARA MEJORAR RENDIMIENTO
 -- ===================================================================
-CREATE INDEX IF NOT EXISTS idx_usuarios_username ON usuarios(username);
-CREATE INDEX IF NOT EXISTS idx_clientes_documento ON clientes(documento);
-CREATE INDEX IF NOT EXISTS idx_proveedores_rif ON proveedores(rif);
 CREATE INDEX IF NOT EXISTS idx_productos_codigo_barras ON productos(codigo_barras);
 CREATE INDEX IF NOT EXISTS idx_productos_categoria ON productos(categoria);
-CREATE INDEX IF NOT EXISTS idx_ventas_numero ON ventas_notas(numero_nota);
 CREATE INDEX IF NOT EXISTS idx_ventas_fecha ON ventas_notas(fecha);
-CREATE INDEX IF NOT EXISTS idx_ventas_cajero ON ventas_notas(cajero_id);
-CREATE INDEX IF NOT EXISTS idx_ventas_items_venta ON ventas_items(venta_id);
-CREATE INDEX IF NOT EXISTS idx_ventas_pagos_venta ON ventas_pagos(venta_id);
-CREATE INDEX IF NOT EXISTS idx_cajas_cajero ON cajas_turnos(cajero_id);
+CREATE INDEX IF NOT EXISTS idx_ventas_cliente ON ventas_notas(cliente_id);
+CREATE INDEX IF NOT EXISTS idx_ventas_turno ON ventas_notas(turno_id);
+CREATE INDEX IF NOT EXISTS idx_movimientos_producto ON movimientos_inventario(producto_id);
 CREATE INDEX IF NOT EXISTS idx_cxc_cliente ON cuentas_por_cobrar(cliente_id);
 CREATE INDEX IF NOT EXISTS idx_cxp_proveedor ON cuentas_por_pagar(proveedor_id);
 
@@ -295,15 +289,65 @@ INSERT INTO proveedores (id, rif, nombre, contacto, telefono, direccion) VALUES
 ON CONFLICT (rif) DO NOTHING;
 
 -- PRODUCTOS E INVENTARIO
-INSERT INTO productos (id, codigo_barras, nombre, categoria, clasificacion, costo_usd, margen_ganancia, precio_usd, stock_actual, stock_minimo, unidad_medida) VALUES
-('prod-001', '759100100101', 'Harina Pan Tradicional 1Kg', 'Alimentos', 'exento', 1.05, 23.81, 1.30, 85, 20, 'paquete'),
-('prod-002', '759100100102', 'Arroz Blanco Primor 1Kg', 'Alimentos', 'exento', 1.10, 27.27, 1.40, 60, 15, 'paquete'),
-('prod-003', '759100100103', 'Aceite Vegetal Vatel 1L', 'Alimentos', 'exento', 2.80, 25.00, 3.50, 42, 10, 'botella'),
-('prod-004', '759100100201', 'Refresco Coca-Cola 1.5L', 'Bebidas', 'gravable', 1.60, 37.50, 2.20, 35, 12, 'botella'),
-('prod-005', '759100100202', 'Agua Mineral Minalba 5L', 'Bebidas', 'gravable', 1.80, 38.89, 2.50, 28, 8, 'botellón'),
-('prod-006', '759100100301', 'Detergente Las Llaves 1Kg', 'Limpieza', 'gravable', 2.10, 33.33, 2.80, 19, 10, 'bolsa'),
-('prod-007', '759100100401', 'Cable USB Tipo C Reforzado 1m', 'Tecnología', 'gravable', 1.50, 100.00, 3.00, 25, 5, 'unidad'),
-('prod-008', '759100100402', 'Cargador Rápido 20W USB-C', 'Tecnología', 'gravable', 5.00, 70.00, 8.50, 14, 5, 'unidad'),
-('prod-009', '759100100501', 'Café Molido Fama de América 500g', 'Alimentos', 'exento', 2.20, 27.27, 2.80, 30, 10, 'paquete'),
-('prod-010', '759100100502', 'Azúcar Refinada Montalbán 1Kg', 'Alimentos', 'exento', 1.15, 30.43, 1.50, 50, 15, 'paquete')
+INSERT INTO productos (id, codigo_barras, nombre, categoria, clasificacion, costo_usd, margen_ganancia, unidades, precio_usd, stock_actual, stock_minimo, unidad_medida) VALUES
+('prod-001', '759100100101', 'Harina Pan Tradicional 1Kg', 'Alimentos', 'exento', 1.05, 23.81, 1, 1.30, 85, 20, 'paquete'),
+('prod-002', '759100100102', 'Arroz Blanco Primor 1Kg', 'Alimentos', 'exento', 1.10, 27.27, 1, 1.40, 60, 15, 'paquete'),
+('prod-003', '759100100103', 'Aceite Vegetal Vatel 1L', 'Alimentos', 'exento', 2.80, 25.00, 1, 3.50, 42, 10, 'botella'),
+('prod-004', '759100100201', 'Refresco Coca-Cola 1.5L', 'Bebidas', 'gravable', 1.60, 37.50, 1, 2.20, 35, 12, 'botella'),
+('prod-005', '759100100202', 'Agua Mineral Minalba 5L', 'Bebidas', 'gravable', 1.80, 38.89, 1, 2.50, 28, 8, 'botellón'),
+('prod-006', '759100100301', 'Detergente Las Llaves 1Kg', 'Limpieza', 'gravable', 2.10, 33.33, 1, 2.80, 19, 10, 'bolsa'),
+('prod-007', '759100100401', 'Cable USB Tipo C Reforzado 1m', 'Tecnología', 'gravable', 1.50, 100.00, 1, 3.00, 25, 5, 'unidad'),
+('prod-008', '759100100402', 'Cargador Rápido 20W USB-C', 'Tecnología', 'gravable', 5.00, 70.00, 1, 8.50, 14, 5, 'unidad'),
+('prod-009', '759100100501', 'Café Molido Fama de América 500g', 'Alimentos', 'exento', 2.20, 27.27, 1, 2.80, 30, 10, 'paquete'),
+('prod-010', '759100100502', 'Azúcar Refinada Montalbán 1Kg', 'Alimentos', 'exento', 1.15, 30.43, 1, 1.50, 50, 15, 'paquete')
 ON CONFLICT (codigo_barras) DO NOTHING;
+
+-- ===================================================================
+-- 6. TRIGGER PARA ACTUALIZAR updated_at AUTOMÁTICAMENTE
+-- ===================================================================
+CREATE OR REPLACE FUNCTION actualizar_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_actualizar_timestamp_productos
+  BEFORE UPDATE ON productos
+  FOR EACH ROW
+  EXECUTE FUNCTION actualizar_timestamp();
+
+-- ===================================================================
+-- 7. TRIGGER PARA VALIDAR DATOS DE PRODUCTOS
+-- ===================================================================
+CREATE OR REPLACE FUNCTION validar_producto()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Validar que el margen esté entre 0 y 99%
+  IF NEW.margen_ganancia < 0 OR NEW.margen_ganancia >= 100 THEN
+    RAISE EXCEPTION 'El margen de ganancia debe estar entre 0 y 99%';
+  END IF;
+  
+  -- Validar que las unidades sean al menos 1
+  IF NEW.unidades IS NULL OR NEW.unidades < 1 THEN
+    RAISE EXCEPTION 'Las unidades deben ser al menos 1';
+  END IF;
+  
+  -- Validar que el costo no sea negativo
+  IF NEW.costo_usd < 0 THEN
+    RAISE EXCEPTION 'El costo no puede ser negativo';
+  END IF;
+  
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_validar_producto
+  BEFORE INSERT OR UPDATE ON productos
+  FOR EACH ROW
+  EXECUTE FUNCTION validar_producto();
+
+-- ===================================================================
+-- FIN DEL SCRIPT DE BASE DE DATOS
+-- ===================================================================

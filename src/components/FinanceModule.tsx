@@ -162,6 +162,45 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
   const totalCxCPendienteUSD = cxc.reduce((sum, c) => sum + c.saldoPendienteUSD, 0);
   const totalCxPPendienteUSD = cxp.reduce((sum, p) => sum + p.saldoPendienteUSD, 0);
 
+  // Datos para gráficos de barras (últimos 6 meses)
+  const chartData = useMemo(() => {
+    const months = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthStr = d.toLocaleDateString('es-VE', { month: 'short', year: 'numeric' });
+      months.push({
+        label: monthStr,
+        dateStart: d.toISOString().slice(0, 10),
+        dateEnd: new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().slice(0, 10),
+      });
+    }
+
+    return months.map((m) => {
+      const monthSales = sales.filter((s) => {
+        const d = s.fecha.slice(0, 10);
+        return d >= m.dateStart && d <= m.dateEnd && s.estado === 'completada';
+      });
+      const monthExpenses = expenses.filter((e) => {
+        const d = e.fecha.slice(0, 10);
+        return d >= m.dateStart && d <= m.dateEnd;
+      });
+
+      const monthIngresos = monthSales.reduce((sum, s) => sum + s.totalUSD, 0);
+      const monthCosto = monthSales.reduce((sum, s) => sum + s.costoTotalUSD, 0);
+      const monthGastos = monthExpenses.reduce((sum, e) => sum + e.montoUSD, 0);
+      const monthUtilidad = monthIngresos - monthCosto - monthGastos;
+
+      return {
+        ...m,
+        ingresos: monthIngresos,
+        costo: monthCosto,
+        gastos: monthGastos,
+        utilidad: monthUtilidad,
+      };
+    });
+  }, [sales, expenses]);
+
   // Manejar Exportación a Excel con filtro de fecha
   const handleExportExcel = () => {
     let dateLabel = '';
@@ -481,15 +520,102 @@ export const FinanceModule: React.FC<FinanceModuleProps> = ({
             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
             <span>Excel</span>
           </button>
+        </div>
+      </div>
 
-          <button
-            type="button"
-            onClick={() => setShowExpenseModal(true)}
-            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Registrar Gasto</span>
-          </button>
+      {/* Gráficos Estadísticos */}
+      <div className="bg-white rounded-xl border border-gray-200 p-5 shadow-xs">
+        <div className="flex items-center gap-2 mb-4">
+          <TrendingUp className="w-5 h-5 text-emerald-600" />
+          <h3 className="text-sm font-bold text-gray-900">Análisis de Rentabilidad (Últimos 6 Meses)</h3>
+        </div>
+        
+        <div className="text-xs text-gray-600 mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100">
+          <strong className="text-blue-900">¿Qué significa este gráfico?</strong>
+          <p className="mt-1 text-[11px]">
+            Este gráfico muestra cómo ha variado tu rentabilidad mensual comparando los ingresos por ventas contra los costos de mercancía y gastos operativos.
+            <br/>
+            <span className="text-emerald-600">● Verde:</span> Utilidad neta (lo que queda después de todos los costos)
+            <br/>
+            <span className="text-amber-500">● Ámbar:</span> Costo de mercancía vendida
+            <br/>
+            <span className="text-rose-500">● Rojo:</span> Gastos operativos y administrativos
+          </p>
+        </div>
+
+        {/* Gráfico de Barras */}
+        <div className="space-y-4">
+          <div className="h-48 flex items-end gap-1 sm:gap-2 overflow-x-auto pb-2">
+            {chartData.map((month, idx) => {
+              const maxVal = Math.max(
+                month.ingresos,
+                month.costo + month.gastos + Math.abs(month.utilidad),
+                1
+              );
+              const utilidadBarHeight = (Math.abs(month.utilidad) / maxVal) * 100;
+              const costoBarHeight = (month.costo / maxVal) * 100;
+              const gastosBarHeight = (month.gastos / maxVal) * 100;
+
+              const totalBarHeight = costoBarHeight + gastosBarHeight + utilidadBarHeight;
+
+              return (
+                <div key={idx} className="flex flex-col items-center flex-[0_0_3.5rem] sm:flex-[0_0_5rem] min-w-[4rem]">
+                  <div className="flex flex-col gap-0.5 items-center h-32 sm:h-40 w-full justify-end">
+                    {/* Utilidad (Verde) */}
+                    {month.utilidad !== 0 && (
+                      <div
+                        className={`w-full rounded-t-md transition-all ${
+                          month.utilidad > 0 
+                            ? 'bg-emerald-500' 
+                            : 'bg-rose-500'
+                        }`}
+                        style={{ height: `${utilidadBarHeight}%` }}
+                        title={`Utilidad: ${formatUSD(month.utilidad)}`}
+                      />
+                    )}
+                    {/* Costo (Ámbar) */}
+                    {month.costo > 0 && (
+                      <div
+                        className="w-full bg-amber-400 rounded-t-md transition-all"
+                        style={{ height: `${costoBarHeight}%` }}
+                        title={`Costo: ${formatUSD(month.costo)}`}
+                      />
+                    )}
+                    {/* Gastos (Rojo) */}
+                    {month.gastos > 0 && (
+                      <div
+                        className="w-full bg-rose-400 rounded-t-md transition-all"
+                        style={{ height: `${gastosBarHeight}%` }}
+                        title={`Gastos: ${formatUSD(month.gastos)}`}
+                      />
+                    )}
+                  </div>
+                  <div className="mt-2 text-[10px] font-bold text-gray-700 text-center">
+                    {month.label}
+                  </div>
+                  <div className="text-[9px] text-gray-500 text-center">
+                    {month.utilidad > 0 ? '+' : ''}{formatUSD(month.utilidad)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Leyenda */}
+          <div className="flex flex-wrap items-center gap-3 text-xs justify-center pt-2">
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-emerald-500 rounded-sm"></div>
+              <span className="text-gray-600">Utilidad Neta</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-amber-400 rounded-sm"></div>
+              <span className="text-gray-600">Costo Mercancía</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-rose-400 rounded-sm"></div>
+              <span className="text-gray-600">Gastos Operativos</span>
+            </div>
+          </div>
         </div>
       </div>
 

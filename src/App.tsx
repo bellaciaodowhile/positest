@@ -64,11 +64,27 @@ import {
   setStoredDemoMode,
   REAL_SYSTEM_USERS,
   DatasetState,
+  setLastSyncTimestamp,
 } from './services/environmentManager';
+import { initOfflineSyncSystem, hasPendingSyncOperations, getPendingSyncCount } from './services/initOfflineSync';
+import { onlineMonitor } from './services/onlineMonitor';
 
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Inicializar sistema de sincronización offline al montar el componente
+  React.useEffect(() => {
+    initOfflineSyncSystem();
+    
+    // Verificar estado de conexión inicial
+    console.log(`[App] Estado inicial de conexión: ${onlineMonitor.getStatus()}`);
+    console.log(`[App] Operaciones pendientes de sincronización: ${getPendingSyncCount()}`);
+    
+    return () => {
+      // Cleanup si es necesario
+    };
+  }, []);
 
   // Inicialización de Usuario y Entorno (Aislamiento de Demo vs Modo Real Operativo)
   const [currentUser, setCurrentUser] = useState<User>(() => {
@@ -625,6 +641,18 @@ export default function App() {
     );
   };
 
+  const handleDeleteProduct = (deletedProd: Product) => {
+    setProducts((prev) => prev.filter((p) => p.id !== deletedProd.id));
+    addAuditLog(
+      'Eliminación de Producto',
+      'inventario',
+      `Artículo eliminado: ${deletedProd.nombre} (Código: ${deletedProd.codigoBarras})`
+    );
+    syncProductToSupabase(deletedProd).catch((err) =>
+      console.warn('Sync delete product Supabase aviso:', err)
+    );
+  };
+
   const handleStockMovement = (movement: InventoryMovement) => {
     setProducts((prev) =>
       prev.map((p) =>
@@ -1043,6 +1071,7 @@ export default function App() {
               currentUser={currentUser}
               onAddProduct={handleAddProduct}
               onUpdateProduct={handleUpdateProduct}
+              onDeleteProduct={handleDeleteProduct}
               onStockMovement={handleStockMovement}
             />
           )}

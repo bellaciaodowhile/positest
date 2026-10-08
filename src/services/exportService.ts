@@ -27,10 +27,12 @@ export function exportInventoryToExcel(products: Product[], bcvRate: number) {
     'Producto': p.nombre,
     'Categoría': p.categoria,
     'Clasificación Fiscal': p.clasificacion.toUpperCase(),
-    'Costo (USD)': p.costoUSD,
+    'Costo Total (USD)': p.costoUSD,
     '% Margen Ganancia': `${p.margenGanancia}%`,
-    'Precio Venta (USD)': p.precioUSD,
-    'Precio Venta (VES @ BCV)': Number((p.precioUSD * bcvRate).toFixed(2)),
+    'Unidades por Paquete': p.unidades,
+    'Precio Venta Unitario (USD)': p.precioUSD,
+    'Precio Venta Total (USD)': Number((p.precioUSD * p.unidades).toFixed(2)),
+    'Precio Venta Total (VES @ BCV)': Number((p.precioUSD * p.unidades * bcvRate).toFixed(2)),
     'Stock Actual': p.stockActual,
     'Stock Mínimo': p.stockMinimo,
     'Unidad': p.unidadMedida,
@@ -351,22 +353,21 @@ export function generateSaleNotePDF(sale: SaleNote) {
   const pageWidth = 80;
   let y = 8;
 
+  // Información de la empresa
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.text('COMERCIALIZADORA ÁVILA', pageWidth / 2, y, { align: 'center' });
+  doc.text('BODEGA KENYARI', pageWidth / 2, y, { align: 'center' });
   y += 4;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.text('RIF: J-40123456-7', pageWidth / 2, y, { align: 'center' });
+  doc.text('04162861215', pageWidth / 2, y, { align: 'center' });
   y += 3.5;
-  doc.text('Av. Francisco de Miranda, Chacao, Caracas', pageWidth / 2, y, { align: 'center' });
-  y += 3.5;
-  doc.text('Teléf: (0212) 952-0000', pageWidth / 2, y, { align: 'center' });
+  doc.text('Av. Alejandro Vargas, 50mts del CICPC', pageWidth / 2, y, { align: 'center' });
   y += 5;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text('NOTA DE ENTREGA / COMPROBANTE INTERNO', pageWidth / 2, y, { align: 'center' });
+  doc.text('NOTA DE ENTREGA', pageWidth / 2, y, { align: 'center' });
   y += 4;
   doc.setFontSize(8);
   doc.text(`N°: ${sale.numeroNota}`, pageWidth / 2, y, { align: 'center' });
@@ -380,13 +381,7 @@ export function generateSaleNotePDF(sale: SaleNote) {
   doc.setFontSize(7.5);
   doc.text(`Fecha: ${new Date(sale.fecha).toLocaleString('es-VE')}`, 5, y);
   y += 3.5;
-  doc.text(`Cajero: ${sale.cajeroNombre}`, 5, y);
-  y += 3.5;
-  doc.text(`Cliente: ${sale.clienteNombre}`, 5, y);
-  y += 3.5;
-  doc.text(`Doc / RIF: ${sale.clienteDocumento}`, 5, y);
-  y += 3.5;
-  doc.text(`Tasa Oficial BCV: ${formatVES(sale.tasaBCV)} / REF`, 5, y);
+  doc.text(`Tasa Oficial BCV: ${sale.tasaBCV.toFixed(2)}`, 5, y);
   y += 4;
 
   doc.line(4, y, pageWidth - 4, y);
@@ -397,18 +392,22 @@ export function generateSaleNotePDF(sale: SaleNote) {
   doc.setFontSize(7);
   doc.text('CANT', 5, y);
   doc.text('DESCRIPCIÓN', 15, y);
-  doc.text('P.UNIT', 52, y);
+  doc.text('P.UNIT', 48, y);
   doc.text('TOTAL', pageWidth - 5, y, { align: 'right' });
   y += 3;
 
   doc.setFont('helvetica', 'normal');
   (sale.items || []).forEach((item) => {
     const itemName = item.nombre || (item as any).productoNombre || (item as any).nombre_producto || 'Artículo';
-    const desc = itemName.length > 20 ? itemName.substring(0, 18) + '..' : itemName;
+    const desc = itemName.length > 18 ? itemName.substring(0, 16) + '..' : itemName;
+    // Precios en Bolívares (VES)
+    const unitPriceVES = Number(item.precioUnitarioVES) || (Number(item.precioUnitarioUSD) * sale.tasaBCV);
+    const totalPriceVES = Number(item.totalVES) || (Number(item.totalUSD) * sale.tasaBCV);
+    
     doc.text(`${item.cantidad}`, 5, y);
     doc.text(desc, 15, y);
-    doc.text(`REF ${(Number(item.precioUnitarioUSD) || 0).toFixed(2)}`, 52, y);
-    doc.text(`REF ${(Number(item.totalUSD || item.subtotalUSD) || 0).toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
+    doc.text(`Bs. ${unitPriceVES.toFixed(2)}`, 48, y);
+    doc.text(`Bs. ${totalPriceVES.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
     y += 3.5;
   });
 
@@ -416,37 +415,40 @@ export function generateSaleNotePDF(sale: SaleNote) {
   doc.line(4, y, pageWidth - 4, y);
   y += 4;
 
-  // Totales
+  // Totales en Bolívares
   doc.setFontSize(7.5);
+  
+  const subtotalGravableVES = Number((sale.subtotalGravableUSD * sale.tasaBCV).toFixed(2));
+  const subtotalExentoVES = Number((sale.subtotalExentoUSD * sale.tasaBCV).toFixed(2));
+  const ivaVES = Number((sale.ivaUSD * sale.tasaBCV).toFixed(2));
+  const igtfVES = Number((sale.igtfUSD * sale.tasaBCV).toFixed(2));
+  const totalVES = Number((sale.totalUSD * sale.tasaBCV).toFixed(2));
+
   doc.text('Subtotal Exento:', 10, y);
-  doc.text(`REF ${sale.subtotalExentoUSD.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
+  doc.text(`Bs. ${subtotalExentoVES.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
   y += 3.5;
 
   doc.text('Subtotal Gravable:', 10, y);
-  doc.text(`REF ${sale.subtotalGravableUSD.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
+  doc.text(`Bs. ${subtotalGravableVES.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
   y += 3.5;
 
-  if (sale.ivaUSD > 0) {
+  if (ivaVES > 0) {
     doc.text('IVA (16%):', 10, y);
-    doc.text(`REF ${sale.ivaUSD.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
+    doc.text(`Bs. ${ivaVES.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
     y += 3.5;
   }
 
-  if (sale.igtfUSD > 0) {
-    doc.text('IGTF (3% Divisas):', 10, y);
-    doc.text(`REF ${sale.igtfUSD.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
+  if (igtfVES > 0) {
+    doc.text('IGTF (3%):', 10, y);
+    doc.text(`Bs. ${igtfVES.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
     y += 3.5;
   }
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
-  doc.text('TOTAL A PAGAR (REF):', 8, y);
-  doc.text(formatUSD(sale.totalUSD), pageWidth - 5, y, { align: 'right' });
+  doc.text('TOTAL A PAGAR:', 8, y);
+  doc.text(`Bs. ${totalVES.toFixed(2)}`, pageWidth - 5, y, { align: 'right' });
   y += 4;
-
-  doc.text('TOTAL A PAGAR (VES):', 8, y);
-  doc.text(formatVES(sale.totalVES), pageWidth - 5, y, { align: 'right' });
-  y += 4.5;
 
   doc.line(4, y, pageWidth - 4, y);
   y += 4;
@@ -460,21 +462,15 @@ export function generateSaleNotePDF(sale: SaleNote) {
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   sale.pagos.forEach((p) => {
-    const formattedAmt = p.moneda === 'USD' ? formatUSD(p.montoOriginal) : formatVES(p.montoOriginal);
+    // Formatear en Bolívares
+    const formattedAmt = p.moneda === 'USD' 
+      ? `Bs. ${(p.montoOriginal * sale.tasaBCV).toFixed(2)}`
+      : `Bs. ${p.montoOriginal.toFixed(2)}`;
     const igtfNote = p.aplicaIGTF ? ' (Incluye IGTF 3%)' : '';
-    doc.text(`• ${p.nombreMetodo}${igtfNote}:`, 5, y);
+    doc.text(`• ${p.nombreMetodo}${igtfNote}`, 5, y);
     doc.text(formattedAmt, pageWidth - 5, y, { align: 'right' });
     y += 3.2;
   });
-
-  if (sale.vueltoUSD > 0 || sale.vueltoVES > 0) {
-    y += 1;
-    doc.setFont('helvetica', 'bold');
-    doc.text('Vuelto Entregado:', 5, y);
-    const vueltoStr = `${sale.vueltoUSD > 0 ? formatUSD(sale.vueltoUSD) : ''} ${sale.vueltoVES > 0 ? formatVES(sale.vueltoVES) : ''}`.trim();
-    doc.text(vueltoStr, pageWidth - 5, y, { align: 'right' });
-    y += 3.5;
-  }
 
   y += 3;
   doc.setFont('helvetica', 'italic');
@@ -483,7 +479,7 @@ export function generateSaleNotePDF(sale: SaleNote) {
   y += 3;
   doc.text('NO CONSTITUYE FACTURA FISCAL', pageWidth / 2, y, { align: 'center' });
   y += 3;
-  doc.text('¡Gracias por su compra y preferencia!', pageWidth / 2, y, { align: 'center' });
+  doc.text('¡Gracias por su compra!', pageWidth / 2, y, { align: 'center' });
 
   doc.save(`Nota_${sale.numeroNota}.pdf`);
 }

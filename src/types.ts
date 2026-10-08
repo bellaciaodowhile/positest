@@ -33,7 +33,8 @@ export interface Product {
   clasificacion: TaxClassification; // 'gravable' (aplica IVA) o 'exento'
   costoUSD: number;
   margenGanancia: number; // Porcentaje ej. 30 (%)
-  precioUSD: number; // Calculado o ajustado
+  unidades: number; // Número de unidades por paquete
+  precioUSD: number; // Calculado: Costo ÷ (1 - Margen/100) ÷ Unidades
   stockActual: number;
   stockMinimo: number;
   unidadMedida: string;

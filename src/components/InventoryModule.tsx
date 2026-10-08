@@ -9,6 +9,7 @@ import {
   AlertTriangle,
   ArrowUpDown,
   Edit2,
+  Trash,
   Lock,
   Layers,
   ArrowDownRight,
@@ -43,6 +44,7 @@ interface InventoryModuleProps {
   currentUser: User;
   onAddProduct: (prod: Product) => void;
   onUpdateProduct: (prod: Product) => void;
+  onDeleteProduct: (prod: Product) => void;
   onStockMovement: (movement: InventoryMovement) => void;
   onImportSampleCatalog?: () => void;
 }
@@ -53,6 +55,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
   currentUser,
   onAddProduct,
   onUpdateProduct,
+  onDeleteProduct,
   onStockMovement,
   onImportSampleCatalog,
 }) => {
@@ -60,6 +63,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
   const [filterCategory, setFilterCategory] = useState('Todas');
   const [filterClassification, setFilterClassification] = useState<string>('todos');
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
+  const [showCostModal, setShowCostModal] = useState(false);
 
   // Modal Crear / Editar Producto
   const [showProductModal, setShowProductModal] = useState(false);
@@ -89,9 +93,10 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
   const [nombre, setNombre] = useState('');
   const [categoria, setCategoria] = useState('Alimentos');
   const [clasificacion, setClasificacion] = useState<TaxClassification>('gravable');
-  const [costoUSD, setCostoUSD] = useState<number>(1.0);
-  const [margenGanancia, setMargenGanancia] = useState<number>(30.0);
-  const [precioUSD, setPrecioUSD] = useState<number>(1.3);
+  const [costoUSD, setCostoUSD] = useState<string>('');
+  const [margenGanancia, setMargenGanancia] = useState<string>('');
+  const [unidades, setUnidades] = useState<string>('');
+  const [precioUSD, setPrecioUSD] = useState<string>('');
   const [stockActual, setStockActual] = useState<number>(10);
   const [stockMinimo, setStockMinimo] = useState<number>(5);
   const [unidadMedida, setUnidadMedida] = useState('unidad');
@@ -110,20 +115,39 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
 
   const categories = ['Todas', ...Array.from(new Set(products.map((p) => p.categoria)))];
 
-  // Recalcular precio automáticamente al cambiar costo o margen
-  const handleCostOrMarginChange = (cost: number, margin: number) => {
-    setCostoUSD(cost);
-    setMargenGanancia(margin);
-    const calculatedPrice = Number((cost * (1 + margin / 100)).toFixed(2));
-    setPrecioUSD(calculatedPrice);
+  // Recalcular precio automáticamente al cambiar costo, margen o unidades
+  const handleCostOrMarginChange = (costStr: string, marginStr: string, unitsStr: string = unidades) => {
+    setCostoUSD(costStr);
+    setMargenGanancia(marginStr);
+    setUnidades(unitsStr);
+    
+    // Fórmula: Costo ÷ (1 - Margen/100) ÷ Unidades
+    const cost = parseFloat(costStr);
+    const margin = parseFloat(marginStr);
+    const units = parseFloat(unitsStr);
+    
+    if (isNaN(cost) || isNaN(margin) || isNaN(units) || margin >= 100 || units <= 0) {
+      setPrecioUSD('');
+      return;
+    }
+    
+    const precioTotal = cost / (1 - margin / 100);
+    const precioPorUnidad = precioTotal / units;
+    setPrecioUSD(Number(precioPorUnidad.toFixed(2)).toString());
   };
 
   // Recalcular margen si el usuario edita directamente el precio en dólares
-  const handlePriceChange = (price: number) => {
-    setPrecioUSD(price);
-    if (costoUSD > 0) {
-      const calculatedMargin = Number((((price - costoUSD) / costoUSD) * 100).toFixed(2));
-      setMargenGanancia(calculatedMargin);
+  const handlePriceChange = (priceStr: string) => {
+    setPrecioUSD(priceStr);
+    const cost = parseFloat(costoUSD);
+    const units = parseFloat(unidades);
+    const price = parseFloat(priceStr);
+    
+    if (!isNaN(cost) && !isNaN(price) && !isNaN(units) && cost > 0 && units > 0) {
+      // Inversa: Margen = (1 - Costo / (Precio * Unidades)) * 100
+      const precioTotal = price * units;
+      const calculatedMargin = Number(((1 - cost / precioTotal) * 100).toFixed(2));
+      setMargenGanancia(calculatedMargin.toString());
     }
   };
 
@@ -133,9 +157,10 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     setNombre('');
     setCategoria('Alimentos');
     setClasificacion('gravable');
-    setCostoUSD(1.0);
-    setMargenGanancia(30.0);
-    setPrecioUSD(1.3);
+    setCostoUSD('');
+    setMargenGanancia('');
+    setUnidades('');
+    setPrecioUSD('');
     setStockActual(20);
     setStockMinimo(5);
     setUnidadMedida('unidad');
@@ -153,9 +178,10 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     setNombre(p.nombre);
     setCategoria(p.categoria);
     setClasificacion(p.clasificacion);
-    setCostoUSD(p.costoUSD);
-    setMargenGanancia(p.margenGanancia);
-    setPrecioUSD(p.precioUSD);
+    setCostoUSD(p.costoUSD > 0 ? p.costoUSD.toString() : '');
+    setMargenGanancia(p.margenGanancia > 0 ? p.margenGanancia.toString() : '');
+    setUnidades(p.unidades > 0 ? p.unidades.toString() : '');
+    setPrecioUSD(p.precioUSD > 0 ? p.precioUSD.toString() : '');
     setStockActual(p.stockActual);
     setStockMinimo(p.stockMinimo);
     setUnidadMedida(p.unidadMedida);
@@ -167,6 +193,12 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     e.preventDefault();
     if (!nombre.trim() || !codigoBarras.trim()) return;
 
+    // Convertir valores string a number
+    const costoUSDNum = parseFloat(costoUSD) || 0;
+    const margenGananciaNum = parseFloat(margenGanancia) || 0;
+    const unidadesNum = parseFloat(unidades) || 1;
+    const precioUSDNum = parseFloat(precioUSD) || 0;
+
     if (editingProduct) {
       const updated: Product = {
         ...editingProduct,
@@ -174,9 +206,10 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
         nombre: nombre.trim(),
         categoria: categoria.trim() || 'General',
         clasificacion,
-        costoUSD: canEditPrices ? costoUSD : editingProduct.costoUSD,
-        margenGanancia: canEditPrices ? margenGanancia : editingProduct.margenGanancia,
-        precioUSD: canEditPrices ? precioUSD : editingProduct.precioUSD,
+        costoUSD: canEditPrices ? costoUSDNum : editingProduct.costoUSD,
+        margenGanancia: canEditPrices ? margenGananciaNum : editingProduct.margenGanancia,
+        unidades: canEditPrices ? unidadesNum : editingProduct.unidades,
+        precioUSD: canEditPrices ? precioUSDNum : editingProduct.precioUSD,
         stockMinimo,
         unidadMedida,
         descripcion,
@@ -189,7 +222,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
         productName: updated.nombre,
         barcode: updated.codigoBarras,
         priceUSD: updated.precioUSD,
-        priceVES: usdToVes(updated.precioUSD, bcvRate),
+        priceVES: updated.precioUSD > 0 ? usdToVes(updated.precioUSD, bcvRate) : 0,
         timestamp: Date.now(),
       });
       setShowProductModal(false);
@@ -200,9 +233,10 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
         nombre: nombre.trim(),
         categoria: categoria.trim() || 'General',
         clasificacion,
-        costoUSD,
-        margenGanancia,
-        precioUSD,
+        costoUSD: costoUSDNum,
+        margenGanancia: margenGananciaNum,
+        unidades: unidadesNum,
+        precioUSD: precioUSDNum,
         stockActual,
         stockMinimo,
         unidadMedida,
@@ -221,7 +255,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
         productName: newProd.nombre,
         barcode: newProd.codigoBarras,
         priceUSD: newProd.precioUSD,
-        priceVES: usdToVes(newProd.precioUSD, bcvRate),
+        priceVES: newProd.precioUSD > 0 ? usdToVes(newProd.precioUSD, bcvRate) : 0,
         timestamp: Date.now(),
       });
 
@@ -244,6 +278,23 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     setMovementQty(1);
     setMovementReason('');
     setShowStockModal(true);
+  };
+
+  // Borrar Producto
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+
+  const handleDeleteProduct = (p: Product) => {
+    setProductToDelete(p);
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDeleteProduct = () => {
+    if (productToDelete) {
+      onDeleteProduct(productToDelete);
+      setShowDeleteConfirm(false);
+      setProductToDelete(null);
+    }
   };
 
   const handleExecuteStockMovement = (e: React.FormEvent) => {
@@ -305,6 +356,10 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
     (acc, p) => acc + p.stockActual * p.precioUSD,
     0
   );
+  const totalGananciaUSD = valorTotalVentaUSD - valorTotalInventarioUSD;
+  const margenGeneralPorcentaje = valorTotalInventarioUSD > 0 
+    ? Number(((totalGananciaUSD / valorTotalInventarioUSD) * 100).toFixed(2))
+    : 0;
   const itemsLowStock = products.filter((p) => p.stockActual <= p.stockMinimo).length;
 
   return (
@@ -345,16 +400,22 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
 
         <div className="bg-white p-3.5 rounded-xl border border-gray-200 shadow-2xs">
           <span className="text-[11px] font-semibold text-gray-500 uppercase">
-            Alertas de Stock
+            Margen General
           </span>
           <div
             className={`text-xl font-bold mt-0.5 ${
-              itemsLowStock > 0 ? 'text-rose-600' : 'text-emerald-600'
+              margenGeneralPorcentaje >= 30 
+                ? 'text-emerald-600' 
+                : margenGeneralPorcentaje >= 20 
+                  ? 'text-amber-600' 
+                  : 'text-rose-600'
             }`}
           >
-            {itemsLowStock} {itemsLowStock === 1 ? 'producto' : 'productos'}
+            {margenGeneralPorcentaje}%
           </div>
-          <span className="text-[11px] text-gray-400">Bajo o agotado</span>
+          <span className="text-[11px] text-gray-400">
+            Ganancia sobre costo
+          </span>
         </div>
       </div>
 
@@ -433,6 +494,15 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
           >
             <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
             <span className="hidden sm:inline">Excel</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowCostModal(true)}
+            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-indigo-600" />
+            <span className="hidden sm:inline">Cómo calcular precio</span>
           </button>
 
           <button
@@ -541,11 +611,16 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                     </td>
 
                     <td className="px-3 py-3 text-right font-bold text-gray-900">
-                      {formatUSD(p.precioUSD)}
+                      {formatUSD(p.precioUSD)} <span className="text-[10px] text-slate-500 font-normal">x {p.unidades} u.</span>
                     </td>
 
                     <td className="px-3 py-3 text-right font-bold text-blue-700">
                       {formatVES(priceVES)}
+                      {p.unidades > 1 && (
+                        <div className="text-[10px] text-blue-500 font-normal">
+                          Total: {formatVES(usdToVes(p.precioUSD * p.unidades, bcvRate))}
+                        </div>
+                      )}
                     </td>
 
                     <td className="px-3 py-3 text-center">
@@ -584,6 +659,14 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                           title="Editar producto o precios"
                         >
                           <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteProduct(p)}
+                          className="p-1.5 text-gray-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Eliminar producto"
+                        >
+                          <Trash className="w-4 h-4" />
                         </button>
                       </div>
                     </td>
@@ -785,14 +868,16 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                       step="0.01"
                       min="0"
                       disabled={!canEditPrices}
-                      value={costoUSD}
+                      value={costoUSD === '' ? '' : Number(costoUSD)}
                       onChange={(e) =>
                         handleCostOrMarginChange(
-                           parseFloat(e.target.value) || 0,
-                          margenGanancia
+                           e.target.value,
+                          margenGanancia,
+                          unidades
                         )
                       }
-                      className="w-full px-3 py-1.5 text-xs font-semibold border border-gray-300 rounded-lg bg-white disabled:bg-gray-100"
+                      placeholder="0.00"
+                      className="w-full px-3 py-1.5 text-xs font-semibold border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 placeholder-gray-300"
                       required
                     />
                   </div>
@@ -806,44 +891,86 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                       step="0.1"
                       min="0"
                       disabled={!canEditPrices}
-                      value={margenGanancia}
+                      value={margenGanancia === '' ? '' : Number(margenGanancia)}
                       onChange={(e) =>
                         handleCostOrMarginChange(
                           costoUSD,
-                          parseFloat(e.target.value) || 0
+                          e.target.value,
+                          unidades
                         )
                       }
-                      className="w-full px-3 py-1.5 text-xs font-semibold border border-gray-300 rounded-lg bg-white disabled:bg-gray-100"
+                      placeholder="0"
+                      className="w-full px-3 py-1.5 text-xs font-semibold border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 placeholder-gray-300"
                       required
                     />
                   </div>
 
                   <div>
                     <label className="block text-[11px] font-semibold text-gray-600 mb-1">
-                      Precio Final (REF)
+                      Unidades por Paquete
+                    </label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="1"
+                      disabled={!canEditPrices}
+                      value={unidades === '' ? '' : Number(unidades)}
+                      onChange={(e) =>
+                        handleCostOrMarginChange(
+                          costoUSD,
+                          margenGanancia,
+                          e.target.value
+                        )
+                      }
+                      placeholder="1"
+                      className="w-full px-3 py-1.5 text-xs font-semibold border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 placeholder-gray-300"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-600 mb-1">
+                      Precio por Unidad (REF)
                     </label>
                     <input
                       type="number"
                       step="0.01"
                       min="0"
                       disabled={!canEditPrices}
-                      value={precioUSD}
-                      onChange={(e) => handlePriceChange(parseFloat(e.target.value) || 0)}
-                      className="w-full px-3 py-1.5 text-xs font-bold text-blue-700 border border-blue-300 rounded-lg bg-white disabled:bg-gray-100"
+                      value={precioUSD === '' ? '' : Number(precioUSD)}
+                      onChange={(e) => handlePriceChange(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full px-3 py-1.5 text-xs font-bold text-blue-700 border border-blue-300 rounded-lg bg-white disabled:bg-gray-100 placeholder-gray-300"
                       required
                     />
                   </div>
                 </div>
+                
+                {/* Fórmula de cálculo */}
+                <div className="p-2 bg-indigo-50/60 rounded-lg border border-indigo-100 text-[10px] text-indigo-800">
+                  Fórmula: Costo ÷ (1 - %/100) ÷ UDS
+                </div>
 
                 {/* Cálculo en Bolívares en vivo */}
-                <div className="p-2.5 bg-blue-50/80 rounded-lg border border-blue-200 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-1.5 text-blue-900 font-semibold">
+                <div className="p-2.5 bg-blue-50/80 rounded-lg border border-blue-200 flex flex-col gap-1">
+                  <div className="flex items-center gap-1.5 text-blue-900 font-semibold text-xs">
                     <DollarSign className="w-4 h-4 text-amber-500" />
-                    <span>Precio en Bolívares (@ Tasa BCV {formatVES(bcvRate)}):</span>
+                    <span>Precio por Unidad en Bolívares (@ Tasa BCV {formatVES(bcvRate)}):</span>
                   </div>
-                  <strong className="text-blue-900 text-sm">
-                    {formatVES(usdToVes(precioUSD, bcvRate))}
-                  </strong>
+                  {precioUSD && parseFloat(precioUSD) > 0 ? (
+                    <>
+                      <strong className="text-blue-900 text-base font-bold">
+                        {formatVES(usdToVes(parseFloat(precioUSD), bcvRate))}
+                      </strong>
+                      {unidades && parseFloat(unidades) > 1 && (
+                        <div className="text-[10px] text-blue-700 mt-1">
+                          Total Paquete: {formatVES(usdToVes(parseFloat(precioUSD) * parseFloat(unidades), bcvRate))}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-blue-700 text-sm">Ingresa un precio para calcular</span>
+                  )}
                 </div>
               </div>
 
@@ -1086,6 +1213,52 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                 <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                 <span>Listo para el siguiente artículo.</span>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Ayuda: Cálculo de Costos y Precios */}
+      {showCostModal && (
+        <CostStructureModal
+          isOpen={showCostModal}
+          onClose={() => setShowCostModal(false)}
+          bcvRate={bcvRate}
+        />
+      )}
+
+      {/* Modal de Confirmación de Eliminación */}
+      {showDeleteConfirm && productToDelete && (
+        <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-gray-200">
+            <h3 className="text-base font-bold text-gray-900 mb-2">
+              Confirmar Eliminación
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              ¿Estás seguro de eliminar el producto <strong className="text-gray-900">{productToDelete.nombre}</strong>?
+              <br/>
+              <span className="text-xs text-gray-500 mt-1 block">
+                Código: {productToDelete.codigoBarras}
+              </span>
+            </p>
+            <p className="text-xs text-rose-600 bg-rose-50 p-2 rounded mb-4">
+              Esta acción no se puede deshacer.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-2 text-xs font-semibold text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteProduct}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs transition-colors"
+              >
+                Eliminar
+              </button>
             </div>
           </div>
         </div>
