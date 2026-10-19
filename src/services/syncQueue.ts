@@ -3,7 +3,7 @@
  * Almacena operaciones pendientes mientras no hay conexión para sincronizar luego con Supabase
  */
 
-import { SaleNote, Product, CashShift, Expense, AccountReceivable, AuditLog, Client, Supplier, InventoryMovement } from '../types';
+import { SaleNote, Product, CashShift, Expense, AccountReceivable, AuditLog, Client, Supplier, InventoryMovement, User } from '../types';
 import { onlineMonitor } from './onlineMonitor';
 
 export type SyncOperationType = 
@@ -16,7 +16,13 @@ export type SyncOperationType =
   | 'client' 
   | 'supplier' 
   | 'cxc' 
-  | 'auditLog';
+  | 'auditLog'
+  | 'deleteProduct'
+  | 'deleteClient'
+  | 'deleteSupplier'
+  | 'deleteUser'
+  | 'deleteCxc'
+  | 'deleteExpense';
 
 export interface SyncOperation {
   id: string;
@@ -184,6 +190,36 @@ async function executeOperation(operation: SyncOperation): Promise<boolean> {
       case 'auditLog': {
         const { syncAuditLogToSupabase } = await import('./supabaseService');
         return await syncAuditLogToSupabase(payload as AuditLog);
+      }
+      
+      case 'deleteProduct': {
+        const { syncDeleteProductToSupabase } = await import('./supabaseService');
+        return await syncDeleteProductToSupabase(payload as Product);
+      }
+      
+      case 'deleteClient': {
+        const { syncDeleteClientToSupabase } = await import('./supabaseService');
+        return await syncDeleteClientToSupabase(payload as Client);
+      }
+      
+      case 'deleteSupplier': {
+        const { syncDeleteSupplierToSupabase } = await import('./supabaseService');
+        return await syncDeleteSupplierToSupabase(payload as Supplier);
+      }
+      
+      case 'deleteUser': {
+        const { syncDeleteUserToSupabase } = await import('./supabaseService');
+        return await syncDeleteUserToSupabase(payload as User);
+      }
+      
+      case 'deleteCxc': {
+        const { syncDeleteCxCToSupabase } = await import('./supabaseService');
+        return await syncDeleteCxCToSupabase(payload as AccountReceivable);
+      }
+      
+      case 'deleteExpense': {
+        const { syncDeleteExpenseToSupabase } = await import('./supabaseService');
+        return await syncDeleteExpenseToSupabase(payload as Expense);
       }
       
       default:

@@ -53,6 +53,12 @@ import {
   syncCxCToSupabase,
   syncSupplierToSupabase,
   syncBulkDataToSupabase,
+  syncDeleteProductToSupabase,
+  syncDeleteClientToSupabase,
+  syncDeleteSupplierToSupabase,
+  syncDeleteUserToSupabase,
+  syncDeleteCxCToSupabase,
+  syncDeleteExpenseToSupabase,
 } from './services/supabaseService';
 import { generateUUID } from './services/uuidUtils';
 import {
@@ -648,7 +654,7 @@ export default function App() {
       'inventario',
       `Artículo eliminado: ${deletedProd.nombre} (Código: ${deletedProd.codigoBarras})`
     );
-    syncProductToSupabase(deletedProd).catch((err) =>
+    syncDeleteProductToSupabase(deletedProd).catch((err) =>
       console.warn('Sync delete product Supabase aviso:', err)
     );
   };

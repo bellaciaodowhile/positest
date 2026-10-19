@@ -1021,3 +1021,198 @@ export async function syncBulkDataToSupabase(dataset: {
   }
 }
 
+/**
+ * Elimina un producto de Supabase
+ */
+export async function syncDeleteProductToSupabase(product: Product): Promise<boolean> {
+  const client = getSupabaseClient();
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('deleteProduct', product);
+    return true;
+  }
+
+  try {
+    const prodUUID = toValidUUID(product.id);
+    if (!prodUUID) {
+      console.warn('Producto sin UUID válido para eliminar:', product.id);
+      return false;
+    }
+
+    const { error } = await client.from('productos').delete().eq('id', prodUUID);
+    if (error) {
+      console.error('Error eliminando producto de Supabase:', error);
+      addToQueue('deleteProduct', product);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error syncDeleteProductToSupabase:', err);
+    addToQueue('deleteProduct', product);
+    return false;
+  }
+}
+
+/**
+ * Elimina un cliente de Supabase
+ */
+export async function syncDeleteClientToSupabase(clientObj: Client): Promise<boolean> {
+  const client = getSupabaseClient();
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('deleteClient', clientObj);
+    return true;
+  }
+
+  try {
+    const cliUUID = mapClientToUUID(clientObj.id);
+    if (!cliUUID) {
+      console.warn('Cliente sin UUID válido para eliminar:', clientObj.id);
+      return false;
+    }
+
+    const { error } = await client.from('clientes').delete().eq('id', cliUUID);
+    if (error) {
+      console.error('Error eliminando cliente de Supabase:', error);
+      addToQueue('deleteClient', clientObj);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error syncDeleteClientToSupabase:', err);
+    addToQueue('deleteClient', clientObj);
+    return false;
+  }
+}
+
+/**
+ * Elimina un proveedor de Supabase
+ */
+export async function syncDeleteSupplierToSupabase(supplier: Supplier): Promise<boolean> {
+  const client = getSupabaseClient();
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('deleteSupplier', supplier);
+    return true;
+  }
+
+  try {
+    const suppUUID = toValidUUID(supplier.id);
+    if (!suppUUID) {
+      console.warn('Proveedor sin UUID válido para eliminar:', supplier.id);
+      return false;
+    }
+
+    const { error } = await client.from('proveedores').delete().eq('id', suppUUID);
+    if (error) {
+      console.error('Error eliminando proveedor de Supabase:', error);
+      addToQueue('deleteSupplier', supplier);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error syncDeleteSupplierToSupabase:', err);
+    addToQueue('deleteSupplier', supplier);
+    return false;
+  }
+}
+
+/**
+ * Elimina un usuario de Supabase
+ */
+export async function syncDeleteUserToSupabase(user: User): Promise<boolean> {
+  const client = getSupabaseClient();
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('deleteUser', user);
+    return true;
+  }
+
+  try {
+    const userUUID = toValidUUID(user.id);
+    if (!userUUID) {
+      console.warn('Usuario sin UUID válido para eliminar:', user.id);
+      return false;
+    }
+
+    const { error } = await client.from('usuarios').delete().eq('id', userUUID);
+    if (error) {
+      console.error('Error eliminando usuario de Supabase:', error);
+      addToQueue('deleteUser', user);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error syncDeleteUserToSupabase:', err);
+    addToQueue('deleteUser', user);
+    return false;
+  }
+}
+
+/**
+ * Elimina una cuenta por cobrar de Supabase
+ */
+export async function syncDeleteCxCToSupabase(cxcItem: AccountReceivable): Promise<boolean> {
+  const client = getSupabaseClient();
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('deleteCxc', cxcItem);
+    return true;
+  }
+
+  try {
+    const cxcUUID = toValidUUID(cxcItem.id);
+    if (!cxcUUID) {
+      console.warn('CxC sin UUID válido para eliminar:', cxcItem.id);
+      return false;
+    }
+
+    const { error } = await client.from('cuentas_por_cobrar').delete().eq('id', cxcUUID);
+    if (error) {
+      console.error('Error eliminando cuenta por cobrar de Supabase:', error);
+      addToQueue('deleteCxc', cxcItem);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error syncDeleteCxCToSupabase:', err);
+    addToQueue('deleteCxc', cxcItem);
+    return false;
+  }
+}
+
+/**
+ * Elimina un gasto de Supabase
+ */
+export async function syncDeleteExpenseToSupabase(expense: Expense): Promise<boolean> {
+  const client = getSupabaseClient();
+  
+  if (!client || !onlineMonitor.isOnline() || !isSupabaseConfigured()) {
+    addToQueue('deleteExpense', expense);
+    return true;
+  }
+
+  try {
+    const expUUID = toValidUUID(expense.id);
+    if (!expUUID) {
+      console.warn('Gasto sin UUID válido para eliminar:', expense.id);
+      return false;
+    }
+
+    const { error } = await client.from('gastos').delete().eq('id', expUUID);
+    if (error) {
+      console.error('Error eliminando gasto de Supabase:', error);
+      addToQueue('deleteExpense', expense);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error syncDeleteExpenseToSupabase:', err);
+    addToQueue('deleteExpense', expense);
+    return false;
+  }
+}
+
+/**
+ * Sincronización masiva de todo el dataset actual a Supabase
+ */
