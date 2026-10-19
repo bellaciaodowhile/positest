@@ -153,7 +153,7 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
 
   const handleOpenCreateModal = () => {
     setEditingProduct(null);
-    setCodigoBarras(`759${Math.floor(100000000 + Math.random() * 900000000)}`);
+    setCodigoBarras('');
     setNombre('');
     setCategoria('Alimentos');
     setClasificacion('gravable');
@@ -742,15 +742,6 @@ export const InventoryModule: React.FC<InventoryModuleProps> = ({
                     <label className="block text-xs font-semibold text-gray-700">
                       Código de Barras / SKU
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => setCodigoBarras(`759${Math.floor(100000000 + Math.random() * 900000000)}`)}
-                      className="text-[11px] text-blue-600 hover:text-blue-800 font-semibold flex items-center gap-1 cursor-pointer"
-                      title="Generar código automático aleatorio"
-                    >
-                      <RefreshCw className="w-3 h-3" />
-                      <span>Generar</span>
-                    </button>
                   </div>
                   <div className="relative">
                     <input
